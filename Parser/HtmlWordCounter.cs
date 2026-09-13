@@ -231,7 +231,15 @@ namespace WebParser.Parser
 
         private void ProcessTagChar(char c)
         {
-            if (_inQuotes)
+            if (_fromSkip && c == '<')
+            {
+                _mode = Mode.Skip;
+                ResetTag();
+                ProcessSkipChar(c);
+                return;
+            }
+
+            if (_inQuotes && !_fromSkip)
             {
                 if (c == _quoteChar)
                 {
@@ -251,8 +259,12 @@ namespace WebParser.Parser
 
                 if (c == '\'' || c == '"')
                 {
-                    _inQuotes = true;
-                    _quoteChar = c;
+                    if (!_fromSkip)
+                    {
+                        _inQuotes = true;
+                        _quoteChar = c;
+                    }
+
                     _tagNameDone = true;
                     return;
                 }
@@ -282,7 +294,7 @@ namespace WebParser.Parser
                 return;
             }
 
-            if (c == '\'' || c == '"')
+            if (!_fromSkip && (c == '\'' || c == '"'))
             {
                 _inQuotes = true;
                 _quoteChar = c;

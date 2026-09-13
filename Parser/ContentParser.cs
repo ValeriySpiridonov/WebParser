@@ -12,11 +12,18 @@ using WebParser.Logger;
 
 namespace WebParser.Parser
 {
-    public class ContentParser : IContentParser
+    public sealed class ContentParser : IContentParser
     {
-        private static readonly HttpClient Http = new HttpClient
+        private static readonly HttpClient Http = new HttpClient(new HttpClientHandler
         {
-            Timeout = TimeSpan.FromSeconds(30)
+            AutomaticDecompression = DecompressionMethods.All
+        })
+        {
+            Timeout = TimeSpan.FromSeconds(30),
+            DefaultRequestHeaders =
+            {
+                { "User-Agent", "WebParser/1.0" }
+            }
         };
 
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> HostSems =

@@ -61,6 +61,7 @@ namespace WebParser
             if (!File.Exists(path))
             {
                 Console.Error.WriteLine($"Файл не найден: {path}");
+                Environment.ExitCode = 1;
                 return new List<string>();
             }
 

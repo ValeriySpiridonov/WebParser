@@ -4,9 +4,9 @@ namespace WebParser.Parser
 {
     public sealed class PageTooLargeException : Exception
     {
-        public long MaxBytes { get; }
+        public int MaxBytes { get; }
 
-        public PageTooLargeException(long maxBytes)
+        public PageTooLargeException(int maxBytes)
             : base($"Размер страницы превышает лимит в {maxBytes} байт")
         {
             MaxBytes = maxBytes;
