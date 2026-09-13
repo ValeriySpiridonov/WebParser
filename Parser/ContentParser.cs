@@ -192,8 +192,8 @@ namespace WebParser.Parser
         {
             PruneHostSemsIfNeeded();
             SemaphoreSlim semaphore = HostSems.GetOrAdd(host, _ => new SemaphoreSlim(_options.MaxConcurrentPerHost));
-            HostLastUse[host] = Environment.TickCount64;
             await semaphore.WaitAsync(cancellationToken);
+            HostLastUse[host] = Environment.TickCount64;
             return new HostGate(semaphore);
         }
 

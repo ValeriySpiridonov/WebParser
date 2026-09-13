@@ -1,4 +1,3 @@
-using System.Text.Json.Serialization;
 using WebParser.Logger;
 
 namespace WebParser.Config
@@ -28,8 +27,6 @@ namespace WebParser.Config
         public string FilePath { get; init; } = "log.txt";
         public long MaxFileSizeBytes { get; init; } = 8 * 1024 * 1024;
         public int QueueCapacity { get; init; } = 10000;
-
-        [JsonConverter(typeof(JsonStringEnumConverter))]
         public LogLevel MinLevel { get; init; } = LogLevel.Info;
     }
 }

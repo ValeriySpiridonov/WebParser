@@ -36,19 +36,20 @@ namespace WebParser
 
             using var schedCts = new CancellationTokenSource();
             using var hardCts = new CancellationTokenSource();
+            Task? hardCancelTask = null;
 
             Console.CancelKeyPress += (_, e) =>
             {
-                e.Cancel = true;
                 if (schedCts.IsCancellationRequested)
                 {
                     return;
                 }
 
+                e.Cancel = true;
                 schedCts.Cancel();
-                _ = Task.Run(() =>
+                hardCancelTask = Task.Run(async () =>
                 {
-                    Task.Delay(GracePeriod).Wait();
+                    await Task.Delay(GracePeriod);
                     hardCts.Cancel();
                 });
             };
@@ -100,6 +101,11 @@ namespace WebParser
                 }
             }
 
+            if (hardCancelTask != null)
+            {
+                await hardCancelTask;
+            }
+
             Console.WriteLine($"\r{stats.ToLine()}");
             logger.Log(new LogMessage { Message = $"Итог: {stats.ToLine()}" });
 
@@ -119,9 +125,14 @@ namespace WebParser
 
         private static async Task RunProgressLoopAsync(RunStats stats, CancellationToken token)
         {
+            int prevLength = 0;
             while (true)
             {
-                Console.Write($"\r{stats.ToLine()}    ");
+                string line = stats.ToLine();
+                int pad = Math.Max(0, prevLength - line.Length) + 4;
+                Console.Write($"\r{line}{new string(' ', pad)}");
+                prevLength = line.Length;
+
                 try
                 {
                     await Task.Delay(1000, token);

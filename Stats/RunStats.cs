@@ -1,4 +1,3 @@
-using System;
 using System.Diagnostics;
 using System.Threading;
 
@@ -10,12 +9,6 @@ namespace WebParser.Stats
         private long _processed;
         private long _errors;
         private long _totalDurationMs;
-
-        public long Processed => Interlocked.Read(ref _processed);
-        public long Errors => Interlocked.Read(ref _errors);
-        public double Rps => Elapsed.TotalSeconds > 0 ? Processed / Elapsed.TotalSeconds : 0;
-        public double AverageMs => Processed > 0 ? _totalDurationMs / (double)Processed : 0;
-        public TimeSpan Elapsed => _clock.Elapsed;
 
         public void Record(bool succeeded, TimeSpan duration)
         {
@@ -30,10 +23,22 @@ namespace WebParser.Stats
             }
         }
 
+        public (long Processed, long Errors, double Rps, double AverageMs, TimeSpan Elapsed) Snapshot()
+        {
+            long processed = Interlocked.Read(ref _processed);
+            long errors = Interlocked.Read(ref _errors);
+            long totalDurationMs = Interlocked.Read(ref _totalDurationMs);
+            TimeSpan elapsed = _clock.Elapsed;
+            double rps = elapsed.TotalSeconds > 0 ? processed / elapsed.TotalSeconds : 0;
+            double averageMs = processed > 0 ? totalDurationMs / (double)processed : 0;
+            return (processed, errors, rps, averageMs, elapsed);
+        }
+
         public string ToLine()
         {
-            return $"Обработано: {Processed}, Ошибок: {Errors}, RPS: {Rps:F1}, Среднее: {AverageMs:F0} мс, " +
-                   $"Прошло: {Elapsed:hh\\:mm\\:ss}";
+            var (processed, errors, rps, averageMs, elapsed) = Snapshot();
+            return $"Обработано: {processed}, Ошибок: {errors}, RPS: {rps:F1}, Среднее: {averageMs:F0} мс, " +
+                   $"Прошло: {elapsed:hh\\:mm\\:ss}";
         }
     }
 }
