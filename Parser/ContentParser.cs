@@ -19,8 +19,8 @@ namespace WebParser.Parser
         private const int HostSemsPruneThreshold = 5000;
         private const long HostIdleMs = 10 * 60 * 1000;
 
-        private static readonly ConcurrentDictionary<string, SemaphoreSlim> HostSems = new();
-        private static readonly ConcurrentDictionary<string, long> HostLastUse = new();
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _hostSems = new();
+        private readonly ConcurrentDictionary<string, long> _hostLastUse = new();
 
         private readonly ILogger _logger;
         private readonly HttpClient _http;
@@ -58,7 +58,7 @@ namespace WebParser.Parser
                     !(uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
                 {
                     _logger.Log(new LogMessage { Message = $"Некорректный адрес: {url}" });
-                    return new ParseResult(false);
+                    return new ParseResult(ParseOutcome.InvalidUrl);
                 }
 
                 _logger.Log(new LogMessage { Message = $"Обработка адреса {url}" });
@@ -72,13 +72,13 @@ namespace WebParser.Parser
                     {
                         Message = $"Не удалось обработать адрес {url}. Код ответа: {(int)response.StatusCode}"
                     });
-                    return new ParseResult(false);
+                    return new ParseResult(ParseOutcome.HttpError);
                 }
 
-                var result = await CountWordsAsync(response, cancellationToken);
+                var words = await CountWordsAsync(response, cancellationToken);
 
                 _logger.Log(new LogMessage { Message = $"Обработка адреса {url} завершена. Результаты обработки:" });
-                foreach (var item in result)
+                foreach (var item in words)
                 {
                     string msg = $"Слово: {item.Word}\tКоличество повторов: {item.Frequency}";
                     if (_verbose)
@@ -88,7 +88,7 @@ namespace WebParser.Parser
                     _logger.Log(new LogMessage { Message = msg, Level = LogLevel.Verbose });
                 }
 
-                return new ParseResult(true);
+                return new ParseResult(ParseOutcome.Success, words);
             }
             catch (OperationCanceledException)
             {
@@ -97,12 +97,12 @@ namespace WebParser.Parser
             catch (PageTooLargeException)
             {
                 _logger.Log(new LogMessage { Message = $"Слишком большой ответ от адреса {url}" });
-                return new ParseResult(false);
+                return new ParseResult(ParseOutcome.PageTooLarge);
             }
             catch (Exception ex)
             {
                 _logger.Log(new LogMessage { Message = $"Ошибка при обработке адреса {url}", Exception = ex });
-                return new ParseResult(false);
+                return new ParseResult(ParseOutcome.Failed);
             }
         }
 
@@ -191,26 +191,26 @@ namespace WebParser.Parser
         private async Task<IDisposable> AcquireHostGateAsync(string host, CancellationToken cancellationToken)
         {
             PruneHostSemsIfNeeded();
-            SemaphoreSlim semaphore = HostSems.GetOrAdd(host, _ => new SemaphoreSlim(_options.MaxConcurrentPerHost));
+            SemaphoreSlim semaphore = _hostSems.GetOrAdd(host, _ => new SemaphoreSlim(_options.MaxConcurrentPerHost));
             await semaphore.WaitAsync(cancellationToken);
-            HostLastUse[host] = Environment.TickCount64;
+            _hostLastUse[host] = Environment.TickCount64;
             return new HostGate(semaphore);
         }
 
-        private static void PruneHostSemsIfNeeded()
+        private void PruneHostSemsIfNeeded()
         {
-            if (HostSems.Count < HostSemsPruneThreshold)
+            if (_hostSems.Count < HostSemsPruneThreshold)
             {
                 return;
             }
 
             long now = Environment.TickCount64;
-            foreach (string host in HostSems.Keys)
+            foreach (string host in _hostSems.Keys)
             {
-                if (HostLastUse.TryGetValue(host, out long last) && now - last > HostIdleMs)
+                if (_hostLastUse.TryGetValue(host, out long last) && now - last > HostIdleMs)
                 {
-                    HostLastUse.TryRemove(host, out _);
-                    HostSems.TryRemove(host, out _);
+                    _hostLastUse.TryRemove(host, out _);
+                    _hostSems.TryRemove(host, out _);
                 }
             }
         }

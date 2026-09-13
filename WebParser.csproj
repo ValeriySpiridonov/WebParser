@@ -11,4 +11,8 @@
     <Product>TravelLine.CodeReview</Product>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Compile Remove="WebParser.Tests\**" />
+  </ItemGroup>
+
 </Project>

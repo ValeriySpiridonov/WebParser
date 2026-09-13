@@ -6,6 +6,7 @@
 ## Стек
 - C# (records, init-свойства, `ObjectDisposedException.ThrowIf`, nullable + implicit usings включены), `net10.0`.
 - Внешних пакетов нет (самописный стриминговый HTML-разбор; конфиг — `System.Text.Json` из BCL).
+  Единственное исключение — тестовый проект `WebParser.Tests` (xUnit): пакеты только там.
 - HTTP: BCL `System.Net.Http.HttpClient`.
 
 ## Структура
@@ -21,6 +22,9 @@
 - `Parser/HtmlWordCounter.cs` — стриминговый single-pass разбор текста (state machine, без DOM): блок-разделители, пропуск script/style/textarea, комментарии, entities; `WordFrequency`.
 - `Parser/PageTooLargeException.cs` — выбрасывается при превышении лимита страницы.
 - `Logger/ILogger.cs`, `ILogMessage.cs`, `LogMessage.cs` (`required Message`, `Exception?`, `Level`), `AsyncFileLogger.cs` — Channel-логгер из опций (ротация по размеру, уровни). `LogLevel` определён в `ILogMessage.cs`.
+- `WebParser.Tests/` (xUnit) — юнит-тесты `HtmlWordCounter`/`ConfigLoader`/`RunStats`, интеграционные
+  `ContentParser` + `StubHttpServer` (локальный `TcpListener`-сервер), бенчмарк-прогон; helpers: `TestLogger`,
+  `NullLogger`, `StubHttpServer`. Основной csproj исключает `WebParser.Tests\**` из компиляции.
 - `appsettings.json` — шаблон конфигурации (факультатив; отсутствие файла → дефолты).
 
 ## Конвенции
@@ -32,10 +36,7 @@
 ## Команды
 - Сборка: `dotnet build` (должна быть без предупреждений)
 - Запуск: `dotnet run -- <файл со списком URL>` или ввод из stdin; `--verbose`/`-v` — вывод слов в консоль и в лог.
-- Тесты: **сейчас отсутствуют**; после этапа 6 — `dotnet test`
-
-## Известные проблемы (фон для работы)
-- (на этап 6) юнит-тесты парсинга и интеграционные с локальным HTTP-сервером отсутствуют.
+- Тесты: `dotnet test` (проект `WebParser.Tests`, xUnit)
 
 ## Статус эпика и порядок работ
 См. **EPIC.md**. Одна сессия = один этап. По завершении обновить статусы в EPIC.md,

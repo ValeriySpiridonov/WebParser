@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="WebParser.csproj" />
+  <Project Path="WebParser.Tests/WebParser.Tests.csproj" />
+</Solution>
