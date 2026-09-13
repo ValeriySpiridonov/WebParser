@@ -5,12 +5,13 @@
 
 ## Стек
 - C# (records, init-свойства, `ObjectDisposedException.ThrowIf`, nullable + implicit usings включены), `net10.0`.
-- Единственный внешний пакет: `HtmlAgilityPack` 1.13.0.
+- Внешних пакетов нет (самописный стриминговый HTML-разбор).
 - HTTP: BCL `System.Net.Http.HttpClient`.
 
 ## Структура
 - `Program.cs` — точка входа: чтение списка URL (файл/аргумент или stdin), валидация, `Parallel.ForEachAsync` с `MaxDegreeOfParallelism = 10`, Ctrl+C → отмена.
 - `Parser/IContentParser.cs`, `Parser/ContentParser.cs` — парсинг одной страницы: retry (3 попытки, backoff+jitter, `Retry-After`), per-host лимит (2 одновременных), лимит размера страницы (5 МБ), charset из заголовка + `<meta charset>`.
+- `Parser/HtmlWordCounter.cs` — стриминговый single-pass разбор текста (state machine, без DOM): блок-разделители, пропуск script/style/textarea, комментарии, entities; `WordFrequency`.
 - `Parser/PageTooLargeException.cs` — выбрасывается при превышении лимита страницы.
 - `Logger/ILogger.cs`, `ILogMessage.cs`, `LogMessage.cs` (`required Message`, `Exception?`), `DisposableFileLogger.cs` (используется), `FileLogger.cs` (мёртвый код).
 - Конфигурационных файлов нет, всё захардкожено.
@@ -27,8 +28,6 @@
 - Тесты: **сейчас отсутствуют**; после этапа 6 — `dotnet test`
 
 ## Известные проблемы (фон для работы)
-- Двойная материализация HTML в память: HTML загружается в `byte[]`/строку, затем в `HtmlDocument` (этап 3).
-- `ToUpperInvariant` + `Split` + `GroupBy` — лишние аллокации; склейка слов между блочными тегами (`InnerText` даёт `DOMAINTHIS`) (этап 3).
 - `AutoFlush = true` на каждую запись лога; запись блокирующая (этап 4).
 - `FileLogger` открывает StreamWriter на каждый `Log` — мёртвый код, удалить (этап 4).
 - `HostSems` (per-host семафоры) растут на всю жизнь процесса без очистки (этап 5), в лог итоговые вещи дублируются в консоль (этап 4/5).

@@ -1,13 +1,13 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using HtmlAgilityPack;
 using WebParser.Logger;
 
 namespace WebParser.Parser
@@ -65,15 +65,7 @@ namespace WebParser.Parser
                     return;
                 }
 
-                string html = await ReadHtmlAsync(response, cancellationToken);
-                string text = ExtractText(html).ToUpperInvariant();
-
-                char[] delimiterChars = { ' ', ',', '.', '!', '?', '"', ';', ':', '[', ']', '(', ')', '\n', '\r', '\t' };
-                string[] words = text.Split(delimiterChars);
-                var result = words.GroupBy(x => x)
-                                  .Select(x => new { Word = x.Key, Frequency = x.Count() })
-                                  .Where(x => x.Word.Length > 0)
-                                  .OrderByDescending(x => x.Frequency);
+                var result = await CountWordsAsync(response, cancellationToken);
 
                 _logger.Log(new LogMessage { Message = $"Обработка адреса {url} завершена. Результаты обработки:" });
                 foreach (var item in result)
@@ -184,17 +176,42 @@ namespace WebParser.Parser
             return new HostGate(semaphore);
         }
 
-        private static async Task<string> ReadHtmlAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+        private async Task<IReadOnlyList<WordFrequency>> CountWordsAsync(HttpResponseMessage response, CancellationToken cancellationToken)
         {
             string? headerCharset = response.Content.Headers.ContentType?.CharSet;
 
             var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            byte[] body = await ReadBoundedAsync(stream, cancellationToken);
+            Encoding encoding = ResolveEncoding(body, headerCharset);
+
+            using var reader = new StreamReader(new MemoryStream(body), encoding, detectEncodingFromByteOrderMarks: true);
+            var counter = new HtmlWordCounter();
+            char[] buffer = ArrayPool<char>.Shared.Rent(8192);
+
+            try
+            {
+                int read;
+                while ((read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+                {
+                    counter.Process(buffer.AsSpan(0, read));
+                }
+
+                return counter.Complete();
+            }
+            finally
+            {
+                ArrayPool<char>.Shared.Return(buffer);
+            }
+        }
+
+        private static async Task<byte[]> ReadBoundedAsync(Stream stream, CancellationToken cancellationToken)
+        {
             using var buffer = new MemoryStream(MaxPageSizeBytes);
             var chunk = new byte[81920];
 
             while (true)
             {
-                int read = await stream.ReadAsync(chunk, cancellationToken);
+                int read = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), cancellationToken);
                 if (read == 0)
                 {
                     break;
@@ -208,16 +225,7 @@ namespace WebParser.Parser
                 buffer.Write(chunk, 0, read);
             }
 
-            byte[] body = buffer.ToArray();
-            Encoding encoding = ResolveEncoding(body, headerCharset);
-
-            if (ReferenceEquals(encoding, Encoding.UTF8))
-            {
-                using var reader = new StreamReader(new MemoryStream(body), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-                return await reader.ReadToEndAsync();
-            }
-
-            return encoding.GetString(body);
+            return buffer.ToArray();
         }
 
         private static Encoding ResolveEncoding(byte[] body, string? headerCharset)
@@ -276,22 +284,6 @@ namespace WebParser.Parser
         private static bool IsDelimiter(char c)
         {
             return c == '"' || c == '\'' || c == '>' || c == ' ' || c == ';' || c == '\n' || c == '\r' || c == '\t' || c == '/';
-        }
-
-        private static string ExtractText(string html)
-        {
-            var document = new HtmlDocument();
-            document.LoadHtml(html);
-
-            foreach (var node in document.DocumentNode
-                         .Descendants()
-                         .Where(n => n.Name == "script" || n.Name == "style")
-                         .ToList())
-            {
-                node.Remove();
-            }
-
-            return document.DocumentNode.InnerText;
         }
 
         private readonly struct HostGate : IDisposable

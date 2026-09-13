@@ -27,7 +27,7 @@
 - Списывается «висящий» сайт по таймауту; Ctrl+C — graceful shutdown.
 - Лимит размера ответа; `GetEncoding` ловит `NotSupportedException`, fallback на `<meta charset>`.
 
-## Этап 3. Парсинг — память/CPU
+## Этап 3. Парсинг — память/CPU `[x]`
 **Задача:** убрать двойную материализацию HTML, потоковый проход, `Dictionary<string,int>` вместо `GroupBy`.
 **Критерии:**
 - HTML не загружается в строку целиком перед парсингом (один проход, `ArrayPool`/`StringBuilder`).
@@ -64,4 +64,11 @@
   per-host лимит 2 одновременных через `SemaphoreSlim` по `uri.Host`; лимит страницы 5 МБ
   (`PageTooLargeException`, чтение с `ResponseHeadersRead`), charset: header → `<meta charset>` → UTF-8,
   `GetEncoding` ловит `ArgumentException` и `NotSupportedException`; включены `<Nullable>/<ImplicitUsings>`;
-  коммит pending.
+  коммит `a339af5`.
+- Этап 3 — убран HtmlAgilityPack (0 внешних пакетов); новый `HtmlWordCounter` (state machine, single-pass):
+  HTML декодируется из bounded `byte[]` чанками через `ArrayPool<char>` и кормится счётчику без сборки
+  полной строки/DOM; lowercasing посимвольно (нет `ToUpperInvariant`); `Dictionary<string,int>` вместо
+  `GroupBy`/`Split`; пустые токены не создаются; исправлена склейка слов — блочные теги вставляют
+  разделитель, провалены script/style/textarea/комментарии, entities (nbsp/amp/числовые), голый `&`
+  не глотает текст; стриминг устойчив к границам чанков; валидация 13+ сценариев через временный харнесс;
+  финальная сортировка по убыванию частоты; коммит pending.
