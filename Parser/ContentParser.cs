@@ -79,12 +79,11 @@ namespace WebParser.Parser
                 {
                     string msg = $"Слово: {item.Word}\tКоличество повторов: {item.Frequency}";
                     Console.WriteLine(msg);
-                    _logger.Log(new LogMessage { Message = msg });
+                    _logger.Log(new LogMessage { Message = msg, Level = LogLevel.Verbose });
                 }
             }
             catch (OperationCanceledException)
             {
-                _logger.Log(new LogMessage { Message = $"Обработка адреса {url} прервана" });
             }
             catch (PageTooLargeException)
             {

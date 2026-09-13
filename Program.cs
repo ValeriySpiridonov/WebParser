@@ -15,14 +15,17 @@ namespace WebParser
 
         static async Task Main(string[] args)
         {
-            List<string> urls = args.Length > 0 ? ReadUrlsFromFile(args[0]) : ReadUrlsFromConsole();
+            bool verbose = args.Length > 0 && (args[0] == "--verbose" || args[0] == "-v");
+            string? urlFile = verbose ? (args.Length > 1 ? args[1] : null) : (args.Length > 0 ? args[0] : null);
+
+            List<string> urls = urlFile != null ? ReadUrlsFromFile(urlFile) : ReadUrlsFromConsole();
             if (urls.Count == 0)
             {
                 Console.Error.WriteLine("Не указано ни одного корректного адреса");
                 return;
             }
 
-            using var logger = new DisposableFileLogger();
+            using var logger = new AsyncFileLogger(verbose ? LogLevel.Verbose : LogLevel.Info);
             var parser = new ContentParser(logger);
             using var cts = new CancellationTokenSource();
 
