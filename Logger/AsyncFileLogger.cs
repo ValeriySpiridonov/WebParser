@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Text;
-using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 
@@ -13,15 +12,16 @@ namespace WebParser.Logger
         private const long MaxLogBytes = 8 * 1024 * 1024;
         private const int FlushMessageInterval = 200;
 
-        private readonly Channel<string> _channel;
+        private readonly Channel<ILogMessage> _channel;
         private readonly string _logFileName;
         private readonly LogLevel _minLevel;
         private readonly Task _writerTask;
+        private readonly StringBuilder _formatBuilder = new();
 
         private StreamWriter _writer;
         private long _bytesWritten;
         private long _messagesSinceFlush;
-        private bool _disposed;
+        private volatile bool _disposed;
         private volatile bool _writerFaulted;
 
         public AsyncFileLogger(LogLevel minLevel = LogLevel.Info)
@@ -29,7 +29,7 @@ namespace WebParser.Logger
             _minLevel = minLevel;
             _logFileName = GetLogFilePath();
             _writer = new StreamWriter(_logFileName, append: true, Encoding.UTF8);
-            _channel = Channel.CreateBounded<string>(new BoundedChannelOptions(QueueCapacity)
+            _channel = Channel.CreateBounded<ILogMessage>(new BoundedChannelOptions(QueueCapacity)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
@@ -43,8 +43,16 @@ namespace WebParser.Logger
             if (_disposed || _writerFaulted) return;
             if (logMessage.Level < _minLevel) return;
 
-            string text = Format(logMessage);
-            _channel.Writer.TryWrite(text);
+            if (!_channel.Writer.TryWrite(logMessage))
+            {
+                try
+                {
+                    _channel.Writer.WriteAsync(logMessage).AsTask().GetAwaiter().GetResult();
+                }
+                catch (ChannelClosedException)
+                {
+                }
+            }
         }
 
         public void Dispose()
@@ -52,36 +60,17 @@ namespace WebParser.Logger
             if (_disposed) return;
             _disposed = true;
             _channel.Writer.TryComplete();
-            try
-            {
-                _writerTask.GetAwaiter().GetResult();
-            }
-            catch
-            {
-            }
+            _writerTask.GetAwaiter().GetResult();
             _writer.Dispose();
-        }
-
-        private static string Format(ILogMessage logMessage)
-        {
-            var sb = new StringBuilder();
-            sb.Append(DateTime.Now).Append(": ").Append(logMessage.Message);
-            if (logMessage.Exception != null)
-            {
-                sb.AppendLine().Append("Exception: ").Append(logMessage.Exception);
-            }
-            return sb.ToString();
         }
 
         private async Task WriteLoopAsync()
         {
             try
             {
-                await foreach (string line in _channel.Reader.ReadAllAsync())
+                await foreach (ILogMessage logMessage in _channel.Reader.ReadAllAsync())
                 {
-                    _writer.WriteLine(line);
-                    _bytesWritten += Encoding.UTF8.GetByteCount(line.AsSpan()) + 2;
-                    _messagesSinceFlush++;
+                    WriteToFile(logMessage);
 
                     if (_bytesWritten >= MaxLogBytes)
                     {
@@ -101,6 +90,21 @@ namespace WebParser.Logger
                 _writerFaulted = true;
                 Console.Error.WriteLine($"Не удалось записать в лог: {ex.Message}");
             }
+        }
+
+        private void WriteToFile(ILogMessage logMessage)
+        {
+            _formatBuilder.Clear();
+            _formatBuilder.Append(DateTime.Now).Append(": ").Append(logMessage.Message);
+            if (logMessage.Exception != null)
+            {
+                _formatBuilder.AppendLine().Append("Exception: ").Append(logMessage.Exception);
+            }
+
+            string line = _formatBuilder.ToString();
+            _writer.WriteLine(line);
+            _bytesWritten += Encoding.UTF8.GetByteCount(line.AsSpan()) + 2;
+            _messagesSinceFlush++;
         }
 
         private void Rotate()
