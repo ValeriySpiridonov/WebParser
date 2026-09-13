@@ -10,7 +10,7 @@ namespace WebParser.Logger
 
         public FileLogger()
         {
-            string baseDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string? baseDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
             if (string.IsNullOrEmpty(baseDirectory))
                 baseDirectory = AppContext.BaseDirectory;
 

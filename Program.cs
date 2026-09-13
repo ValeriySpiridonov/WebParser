@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebParser.Logger;
 using WebParser.Parser;
@@ -23,14 +24,28 @@ namespace WebParser
 
             using var logger = new DisposableFileLogger();
             var parser = new ContentParser(logger);
+            using var cts = new CancellationTokenSource();
+
+            Console.CancelKeyPress += (_, e) =>
+            {
+                e.Cancel = true;
+                cts.Cancel();
+            };
 
             logger.Log(new LogMessage { Message = $"Начата обработка {urls.Count} адресов" });
 
-            await Parallel.ForEachAsync(urls,
-                new ParallelOptions { MaxDegreeOfParallelism = MaxConcurrency },
-                async (url, _) => await parser.ParseAsync(url));
+            try
+            {
+                await Parallel.ForEachAsync(urls,
+                    new ParallelOptions { MaxDegreeOfParallelism = MaxConcurrency, CancellationToken = cts.Token },
+                    async (url, ct) => await parser.ParseAsync(url, ct));
 
-            logger.Log(new LogMessage { Message = "Обработка завершена" });
+                logger.Log(new LogMessage { Message = "Обработка завершена" });
+            }
+            catch (OperationCanceledException)
+            {
+                logger.Log(new LogMessage { Message = "Обработка прервана пользователем" });
+            }
 
             try
             {
@@ -60,7 +75,7 @@ namespace WebParser
         {
             Console.WriteLine("Введите адреса сайтов, по одному в строке. Для завершения ввода — пустая строка.");
             var urls = new List<string>();
-            string line;
+            string? line;
             while (!string.IsNullOrWhiteSpace(line = Console.ReadLine()))
             {
                 if (IsValidUrl(line))
@@ -78,7 +93,7 @@ namespace WebParser
 
         private static bool IsValidUrl(string url)
         {
-            return Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+            return Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) &&
                    (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
         }
     }

@@ -5,6 +5,6 @@ namespace WebParser.Logger
     public interface ILogMessage
     {
         string Message { get; }
-        Exception Exception { get; }
+        Exception? Exception { get; }
     }
 }

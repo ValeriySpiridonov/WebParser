@@ -4,6 +4,6 @@ namespace WebParser.Parser
 {
     public interface IContentParser
     {
-        Task ParseAsync(string url);
+        Task ParseAsync(string url, System.Threading.CancellationToken cancellationToken = default);
     }
 }

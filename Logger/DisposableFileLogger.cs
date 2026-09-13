@@ -42,7 +42,7 @@ namespace WebParser.Logger
 
         private static string GetLogFilePath()
         {
-            string baseDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string? baseDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
             if (string.IsNullOrEmpty(baseDirectory))
                 baseDirectory = AppContext.BaseDirectory;
 

@@ -19,7 +19,7 @@
 - Один общий `HttpClient` (сейчас static; оформить через `IHttpClientFactory` при необходимости).
 - Аккуратный `using`/`Dispose` логгера.
 
-## Этап 2. Async + politeness
+## Этап 2. Async + politeness `[x]`
 **Задача:** retry с backoff+jitter, `CancellationToken`, per-host rate limiter, лимит размера страницы.
 **Критерии:**
 - Параллельные воркеры не долбят один домен (лимит на `uri.Host`).
@@ -58,3 +58,10 @@
 ## Лог выполнения
 - Этап 1 — чтение списка URL из файла (аргумент) или stdin (до пустой строки), ввод валидируется построчно;
   прогон через `Parallel.ForEachAsync` c `MaxDegreeOfParallelism = 10`, логгер обёрнут в `using`;
+  коммит `4d3f7d2`.
+- Этап 2 — `CancellationToken` в `ParseAsync` и `Parallel.ForEachAsync`, Ctrl+C отменяет обработку;
+  retry 3 попытки (backoff 0.5с*2^n + jitter ±50%, уважение `Retry-After` c капом 30с, статусы 429/408/5xx);
+  per-host лимит 2 одновременных через `SemaphoreSlim` по `uri.Host`; лимит страницы 5 МБ
+  (`PageTooLargeException`, чтение с `ResponseHeadersRead`), charset: header → `<meta charset>` → UTF-8,
+  `GetEncoding` ловит `ArgumentException` и `NotSupportedException`; включены `<Nullable>/<ImplicitUsings>`;
+  коммит pending.

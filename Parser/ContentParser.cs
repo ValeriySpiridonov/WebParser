@@ -1,8 +1,11 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using HtmlAgilityPack;
 using WebParser.Logger;
@@ -16,6 +19,15 @@ namespace WebParser.Parser
             Timeout = TimeSpan.FromSeconds(30)
         };
 
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> HostSems =
+            new ConcurrentDictionary<string, SemaphoreSlim>();
+
+        private const int MaxAttempts = 3;
+        private const int MaxConcurrentPerHost = 2;
+        private const int MaxPageSizeBytes = 5 * 1024 * 1024;
+        private const int CharsetDetectBytes = 4 * 1024;
+        private static readonly TimeSpan MaxRetryAfterCap = TimeSpan.FromSeconds(30);
+
         private readonly ILogger _logger;
 
         static ContentParser()
@@ -28,28 +40,32 @@ namespace WebParser.Parser
             _logger = logger;
         }
 
-        public async Task ParseAsync(string url)
+        public async Task ParseAsync(string url, CancellationToken cancellationToken = default)
         {
             try
             {
+                if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+                    !(uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                {
+                    _logger.Log(new LogMessage { Message = $"Некорректный адрес: {url}" });
+                    return;
+                }
+
                 _logger.Log(new LogMessage { Message = $"Обработка адреса {url}" });
 
-                using var response = await Http.GetAsync(url);
+                using var hostGate = await AcquireHostGateAsync(uri.Host, cancellationToken);
+                using var response = await GetWithRetryAsync(uri, cancellationToken);
 
                 if (!response.IsSuccessStatusCode)
                 {
                     _logger.Log(new LogMessage
                     {
-                        Message = $"Не удалось обработать адрес {url}. Попробуйте выполнить запрос позднее."
+                        Message = $"Не удалось обработать адрес {url}. Код ответа: {(int)response.StatusCode}"
                     });
                     return;
                 }
 
-                Encoding encoding = GetEncoding(response);
-                using var stream = await response.Content.ReadAsStreamAsync();
-                using var reader = new StreamReader(stream, encoding);
-
-                string html = await reader.ReadToEndAsync();
+                string html = await ReadHtmlAsync(response, cancellationToken);
                 string text = ExtractText(html).ToUpperInvariant();
 
                 char[] delimiterChars = { ' ', ',', '.', '!', '?', '"', ';', ':', '[', ']', '(', ')', '\n', '\r', '\t' };
@@ -67,10 +83,199 @@ namespace WebParser.Parser
                     _logger.Log(new LogMessage { Message = msg });
                 }
             }
+            catch (OperationCanceledException)
+            {
+                _logger.Log(new LogMessage { Message = $"Обработка адреса {url} прервана" });
+            }
+            catch (PageTooLargeException)
+            {
+                _logger.Log(new LogMessage { Message = $"Слишком большой ответ от адреса {url}" });
+            }
             catch (Exception ex)
             {
                 _logger.Log(new LogMessage { Message = $"Ошибка при обработке адреса {url}", Exception = ex });
             }
+        }
+
+        private async Task<HttpResponseMessage> GetWithRetryAsync(Uri uri, CancellationToken cancellationToken)
+        {
+            HttpResponseMessage? response = null;
+
+            for (int attempt = 0; attempt < MaxAttempts; attempt++)
+            {
+                response?.Dispose();
+
+                try
+                {
+                    response = await Http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                }
+                catch (HttpRequestException) when (CanRetry(attempt, cancellationToken))
+                {
+                    await RetryBackoffAsync(uri, attempt, null, cancellationToken);
+                    continue;
+                }
+                catch (TaskCanceledException) when (CanRetry(attempt, cancellationToken))
+                {
+                    await RetryBackoffAsync(uri, attempt, null, cancellationToken);
+                    continue;
+                }
+
+                if (response.IsSuccessStatusCode || !IsRetryable(response.StatusCode))
+                {
+                    return response;
+                }
+
+                if (!CanRetry(attempt, cancellationToken))
+                {
+                    return response;
+                }
+
+                await RetryBackoffAsync(uri, attempt, response, cancellationToken);
+            }
+
+            throw new InvalidOperationException($"Невозможно получить ответ от {uri}");
+        }
+
+        private static bool CanRetry(int attempt, CancellationToken cancellationToken)
+        {
+            return attempt < MaxAttempts - 1 && !cancellationToken.IsCancellationRequested;
+        }
+
+        private static bool IsRetryable(HttpStatusCode statusCode)
+        {
+            int code = (int)statusCode;
+            return statusCode == HttpStatusCode.TooManyRequests ||
+                   statusCode == HttpStatusCode.RequestTimeout ||
+                   code == 500 ||
+                   statusCode == HttpStatusCode.BadGateway ||
+                   statusCode == HttpStatusCode.ServiceUnavailable ||
+                   statusCode == HttpStatusCode.GatewayTimeout;
+        }
+
+        private async Task RetryBackoffAsync(Uri uri, int attempt, HttpResponseMessage? response, CancellationToken cancellationToken)
+        {
+            TimeSpan delay = GetRetryDelay(attempt);
+
+            if (response != null && response.StatusCode == HttpStatusCode.TooManyRequests &&
+                response.Headers.RetryAfter?.Delta is TimeSpan retryAfter)
+            {
+                delay = retryAfter > MaxRetryAfterCap ? MaxRetryAfterCap : retryAfter;
+            }
+
+            _logger.Log(new LogMessage
+            {
+                Message = $"Повтор запроса к {uri} через {delay.TotalSeconds:F1} с (попытка {attempt + 2} из {MaxAttempts})"
+            });
+
+            await Task.Delay(delay, cancellationToken);
+        }
+
+        private static TimeSpan GetRetryDelay(int attempt)
+        {
+            double baseDelayMs = 500 * Math.Pow(2, attempt);
+            double jitter = (Random.Shared.NextDouble() - 0.5) * baseDelayMs;
+            return TimeSpan.FromMilliseconds(Math.Max(0, baseDelayMs + jitter));
+        }
+
+        private static async Task<IDisposable> AcquireHostGateAsync(string host, CancellationToken cancellationToken)
+        {
+            SemaphoreSlim semaphore = HostSems.GetOrAdd(host, static _ => new SemaphoreSlim(MaxConcurrentPerHost));
+            await semaphore.WaitAsync(cancellationToken);
+            return new HostGate(semaphore);
+        }
+
+        private static async Task<string> ReadHtmlAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+        {
+            string? headerCharset = response.Content.Headers.ContentType?.CharSet;
+
+            var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var buffer = new MemoryStream(MaxPageSizeBytes);
+            var chunk = new byte[81920];
+
+            while (true)
+            {
+                int read = await stream.ReadAsync(chunk, cancellationToken);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                if (buffer.Length + read > MaxPageSizeBytes)
+                {
+                    throw new PageTooLargeException(MaxPageSizeBytes);
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+
+            byte[] body = buffer.ToArray();
+            Encoding encoding = ResolveEncoding(body, headerCharset);
+
+            if (ReferenceEquals(encoding, Encoding.UTF8))
+            {
+                using var reader = new StreamReader(new MemoryStream(body), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                return await reader.ReadToEndAsync();
+            }
+
+            return encoding.GetString(body);
+        }
+
+        private static Encoding ResolveEncoding(byte[] body, string? headerCharset)
+        {
+            Encoding? encoding = GetEncodingSafe(headerCharset);
+            if (encoding != null)
+            {
+                return encoding;
+            }
+
+            return GetEncodingFromMeta(body) ?? Encoding.UTF8;
+        }
+
+        private static Encoding? GetEncodingSafe(string? charset)
+        {
+            if (string.IsNullOrWhiteSpace(charset))
+            {
+                return null;
+            }
+
+            try
+            {
+                return Encoding.GetEncoding(charset);
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+            catch (NotSupportedException)
+            {
+                return null;
+            }
+        }
+
+        private static Encoding? GetEncodingFromMeta(byte[] body)
+        {
+            int length = Math.Min(body.Length, CharsetDetectBytes);
+            string head = Encoding.ASCII.GetString(body, 0, length);
+
+            int marker = head.IndexOf("charset=", StringComparison.OrdinalIgnoreCase);
+            if (marker < 0)
+            {
+                return null;
+            }
+
+            int start = marker + "charset=".Length;
+            int end = start;
+            while (end < head.Length && !IsDelimiter(head[end]))
+            {
+                end++;
+            }
+
+            return GetEncodingSafe(head.Substring(start, end - start).Trim());
+        }
+
+        private static bool IsDelimiter(char c)
+        {
+            return c == '"' || c == '\'' || c == '>' || c == ' ' || c == ';' || c == '\n' || c == '\r' || c == '\t' || c == '/';
         }
 
         private static string ExtractText(string html)
@@ -89,19 +294,18 @@ namespace WebParser.Parser
             return document.DocumentNode.InnerText;
         }
 
-        private static Encoding GetEncoding(HttpResponseMessage response)
+        private readonly struct HostGate : IDisposable
         {
-            string charset = response.Content.Headers.ContentType?.CharSet;
-            if (string.IsNullOrWhiteSpace(charset))
-                return Encoding.UTF8;
+            private readonly SemaphoreSlim _semaphore;
 
-            try
+            public HostGate(SemaphoreSlim semaphore)
             {
-                return Encoding.GetEncoding(charset);
+                _semaphore = semaphore;
             }
-            catch (ArgumentException)
+
+            public void Dispose()
             {
-                return Encoding.UTF8;
+                _semaphore.Release();
             }
         }
     }
