@@ -1,9 +1,10 @@
-﻿using System.Threading.Tasks;
+﻿using System.Threading;
+using System.Threading.Tasks;
 
 namespace WebParser.Parser
 {
     public interface IContentParser
     {
-        Task ParseAsync(string url, System.Threading.CancellationToken cancellationToken = default);
+        Task<ParseResult> ParseAsync(string url, CancellationToken cancellationToken = default);
     }
 }

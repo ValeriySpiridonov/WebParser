@@ -1,23 +1,27 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using WebParser.Config;
 using WebParser.Logger;
 using WebParser.Parser;
+using WebParser.Stats;
 
 namespace WebParser
 {
     class Program
     {
-        private const int MaxConcurrency = 10;
+        private static readonly TimeSpan GracePeriod = TimeSpan.FromSeconds(5);
 
         static async Task Main(string[] args)
         {
             bool verbose = args.Length > 0 && (args[0] == "--verbose" || args[0] == "-v");
             string? urlFile = verbose ? (args.Length > 1 ? args[1] : null) : (args.Length > 0 ? args[0] : null);
 
+            var options = ConfigLoader.Load();
             List<string> urls = urlFile != null ? ReadUrlsFromFile(urlFile) : ReadUrlsFromConsole();
             if (urls.Count == 0)
             {
@@ -25,29 +29,83 @@ namespace WebParser
                 return;
             }
 
-            using var logger = new AsyncFileLogger(verbose ? LogLevel.Verbose : LogLevel.Info);
-            var parser = new ContentParser(logger);
-            using var cts = new CancellationTokenSource();
+            var loggerMinLevel = verbose ? LogLevel.Verbose : options.Logging.MinLevel;
+            using var logger = new AsyncFileLogger(options.Logging, loggerMinLevel);
+            var parser = new ContentParser(logger, options.Crawler, verbose);
+            var stats = new RunStats();
+
+            using var schedCts = new CancellationTokenSource();
+            using var hardCts = new CancellationTokenSource();
 
             Console.CancelKeyPress += (_, e) =>
             {
                 e.Cancel = true;
-                cts.Cancel();
+                if (schedCts.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                schedCts.Cancel();
+                _ = Task.Run(() =>
+                {
+                    Task.Delay(GracePeriod).Wait();
+                    hardCts.Cancel();
+                });
             };
 
             logger.Log(new LogMessage { Message = $"Начата обработка {urls.Count} адресов" });
 
+            using var progressCts = CancellationTokenSource.CreateLinkedTokenSource(schedCts.Token);
+            Task? progressTask = verbose ? null : RunProgressLoopAsync(stats, progressCts.Token);
+
+            bool cancelledByUser = false;
             try
             {
                 await Parallel.ForEachAsync(urls,
-                    new ParallelOptions { MaxDegreeOfParallelism = MaxConcurrency, CancellationToken = cts.Token },
-                    async (url, ct) => await parser.ParseAsync(url, ct));
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = options.Crawler.MaxConcurrency,
+                        CancellationToken = schedCts.Token
+                    },
+                    async (url, ct) =>
+                    {
+                        var sw = Stopwatch.StartNew();
+                        bool succeeded = (await parser.ParseAsync(url, hardCts.Token)).Succeeded;
+                        sw.Stop();
+                        stats.Record(succeeded, sw.Elapsed);
+                    });
 
                 logger.Log(new LogMessage { Message = "Обработка завершена" });
             }
             catch (OperationCanceledException)
             {
+                cancelledByUser = true;
                 logger.Log(new LogMessage { Message = "Обработка прервана пользователем" });
+            }
+            catch (AggregateException) when (schedCts.IsCancellationRequested || hardCts.IsCancellationRequested)
+            {
+                cancelledByUser = true;
+                logger.Log(new LogMessage { Message = "Обработка прервана пользователем" });
+            }
+
+            progressCts.Cancel();
+            if (progressTask != null)
+            {
+                try
+                {
+                    await progressTask;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+
+            Console.WriteLine($"\r{stats.ToLine()}");
+            logger.Log(new LogMessage { Message = $"Итог: {stats.ToLine()}" });
+
+            if (cancelledByUser)
+            {
+                Console.WriteLine("Обработка прервана пользователем");
             }
 
             try
@@ -56,6 +114,22 @@ namespace WebParser
             }
             catch (InvalidOperationException)
             {
+            }
+        }
+
+        private static async Task RunProgressLoopAsync(RunStats stats, CancellationToken token)
+        {
+            while (true)
+            {
+                Console.Write($"\r{stats.ToLine()}    ");
+                try
+                {
+                    await Task.Delay(1000, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
             }
         }
 

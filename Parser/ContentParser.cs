@@ -8,46 +8,49 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using WebParser.Config;
 using WebParser.Logger;
 
 namespace WebParser.Parser
 {
     public sealed class ContentParser : IContentParser
     {
-        private static readonly HttpClient Http = new HttpClient(new HttpClientHandler
-        {
-            AutomaticDecompression = DecompressionMethods.All
-        })
-        {
-            Timeout = TimeSpan.FromSeconds(30),
-            DefaultRequestHeaders =
-            {
-                { "User-Agent", "WebParser/1.0" }
-            }
-        };
-
-        private static readonly ConcurrentDictionary<string, SemaphoreSlim> HostSems =
-            new ConcurrentDictionary<string, SemaphoreSlim>();
-
-        private const int MaxAttempts = 3;
-        private const int MaxConcurrentPerHost = 2;
-        private const int MaxPageSizeBytes = 5 * 1024 * 1024;
         private const int CharsetDetectBytes = 4 * 1024;
-        private static readonly TimeSpan MaxRetryAfterCap = TimeSpan.FromSeconds(30);
+        private const int HostSemsPruneThreshold = 5000;
+        private const long HostIdleMs = 10 * 60 * 1000;
+
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> HostSems = new();
+        private static readonly ConcurrentDictionary<string, long> HostLastUse = new();
 
         private readonly ILogger _logger;
+        private readonly HttpClient _http;
+        private readonly CrawlerOptions _options;
+        private readonly bool _verbose;
 
         static ContentParser()
         {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         }
 
-        public ContentParser(ILogger logger)
+        public ContentParser(ILogger logger, CrawlerOptions options, bool verbose = false)
         {
             _logger = logger;
+            _options = options;
+            _verbose = verbose;
+            _http = new HttpClient(new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.All
+            })
+            {
+                Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds),
+                DefaultRequestHeaders =
+                {
+                    { "User-Agent", options.UserAgent }
+                }
+            };
         }
 
-        public async Task ParseAsync(string url, CancellationToken cancellationToken = default)
+        public async Task<ParseResult> ParseAsync(string url, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -55,7 +58,7 @@ namespace WebParser.Parser
                     !(uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
                 {
                     _logger.Log(new LogMessage { Message = $"Некорректный адрес: {url}" });
-                    return;
+                    return new ParseResult(false);
                 }
 
                 _logger.Log(new LogMessage { Message = $"Обработка адреса {url}" });
@@ -69,7 +72,7 @@ namespace WebParser.Parser
                     {
                         Message = $"Не удалось обработать адрес {url}. Код ответа: {(int)response.StatusCode}"
                     });
-                    return;
+                    return new ParseResult(false);
                 }
 
                 var result = await CountWordsAsync(response, cancellationToken);
@@ -78,20 +81,28 @@ namespace WebParser.Parser
                 foreach (var item in result)
                 {
                     string msg = $"Слово: {item.Word}\tКоличество повторов: {item.Frequency}";
-                    Console.WriteLine(msg);
+                    if (_verbose)
+                    {
+                        Console.WriteLine(msg);
+                    }
                     _logger.Log(new LogMessage { Message = msg, Level = LogLevel.Verbose });
                 }
+
+                return new ParseResult(true);
             }
             catch (OperationCanceledException)
             {
+                throw;
             }
             catch (PageTooLargeException)
             {
                 _logger.Log(new LogMessage { Message = $"Слишком большой ответ от адреса {url}" });
+                return new ParseResult(false);
             }
             catch (Exception ex)
             {
                 _logger.Log(new LogMessage { Message = $"Ошибка при обработке адреса {url}", Exception = ex });
+                return new ParseResult(false);
             }
         }
 
@@ -99,13 +110,13 @@ namespace WebParser.Parser
         {
             HttpResponseMessage? response = null;
 
-            for (int attempt = 0; attempt < MaxAttempts; attempt++)
+            for (int attempt = 0; attempt < _options.MaxAttempts; attempt++)
             {
                 response?.Dispose();
 
                 try
                 {
-                    response = await Http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                    response = await _http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 }
                 catch (HttpRequestException) when (CanRetry(attempt, cancellationToken))
                 {
@@ -134,9 +145,9 @@ namespace WebParser.Parser
             throw new InvalidOperationException($"Невозможно получить ответ от {uri}");
         }
 
-        private static bool CanRetry(int attempt, CancellationToken cancellationToken)
+        private bool CanRetry(int attempt, CancellationToken cancellationToken)
         {
-            return attempt < MaxAttempts - 1 && !cancellationToken.IsCancellationRequested;
+            return attempt < _options.MaxAttempts - 1 && !cancellationToken.IsCancellationRequested;
         }
 
         private static bool IsRetryable(HttpStatusCode statusCode)
@@ -152,34 +163,56 @@ namespace WebParser.Parser
 
         private async Task RetryBackoffAsync(Uri uri, int attempt, HttpResponseMessage? response, CancellationToken cancellationToken)
         {
+            int maxAttempts = _options.MaxAttempts;
             TimeSpan delay = GetRetryDelay(attempt);
 
             if (response != null && response.StatusCode == HttpStatusCode.TooManyRequests &&
                 response.Headers.RetryAfter?.Delta is TimeSpan retryAfter)
             {
-                delay = retryAfter > MaxRetryAfterCap ? MaxRetryAfterCap : retryAfter;
+                TimeSpan cap = TimeSpan.FromSeconds(_options.RetryAfterCapSeconds);
+                delay = retryAfter > cap ? cap : retryAfter;
             }
 
             _logger.Log(new LogMessage
             {
-                Message = $"Повтор запроса к {uri} через {delay.TotalSeconds:F1} с (попытка {attempt + 2} из {MaxAttempts})"
+                Message = $"Повтор запроса к {uri} через {delay.TotalSeconds:F1} с (попытка {attempt + 2} из {maxAttempts})"
             });
 
             await Task.Delay(delay, cancellationToken);
         }
 
-        private static TimeSpan GetRetryDelay(int attempt)
+        private TimeSpan GetRetryDelay(int attempt)
         {
-            double baseDelayMs = 500 * Math.Pow(2, attempt);
+            double baseDelayMs = _options.RetryBaseDelayMs * Math.Pow(2, attempt);
             double jitter = (Random.Shared.NextDouble() - 0.5) * baseDelayMs;
             return TimeSpan.FromMilliseconds(Math.Max(0, baseDelayMs + jitter));
         }
 
-        private static async Task<IDisposable> AcquireHostGateAsync(string host, CancellationToken cancellationToken)
+        private async Task<IDisposable> AcquireHostGateAsync(string host, CancellationToken cancellationToken)
         {
-            SemaphoreSlim semaphore = HostSems.GetOrAdd(host, static _ => new SemaphoreSlim(MaxConcurrentPerHost));
+            PruneHostSemsIfNeeded();
+            SemaphoreSlim semaphore = HostSems.GetOrAdd(host, _ => new SemaphoreSlim(_options.MaxConcurrentPerHost));
+            HostLastUse[host] = Environment.TickCount64;
             await semaphore.WaitAsync(cancellationToken);
             return new HostGate(semaphore);
+        }
+
+        private static void PruneHostSemsIfNeeded()
+        {
+            if (HostSems.Count < HostSemsPruneThreshold)
+            {
+                return;
+            }
+
+            long now = Environment.TickCount64;
+            foreach (string host in HostSems.Keys)
+            {
+                if (HostLastUse.TryGetValue(host, out long last) && now - last > HostIdleMs)
+                {
+                    HostLastUse.TryRemove(host, out _);
+                    HostSems.TryRemove(host, out _);
+                }
+            }
         }
 
         private async Task<IReadOnlyList<WordFrequency>> CountWordsAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -187,7 +220,7 @@ namespace WebParser.Parser
             string? headerCharset = response.Content.Headers.ContentType?.CharSet;
 
             var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            byte[] body = await ReadBoundedAsync(stream, cancellationToken);
+            byte[] body = await ReadBoundedAsync(stream, _options.MaxPageSizeBytes, cancellationToken);
             Encoding encoding = ResolveEncoding(body, headerCharset);
 
             using var reader = new StreamReader(new MemoryStream(body), encoding, detectEncodingFromByteOrderMarks: true);
@@ -210,9 +243,9 @@ namespace WebParser.Parser
             }
         }
 
-        private static async Task<byte[]> ReadBoundedAsync(Stream stream, CancellationToken cancellationToken)
+        private static async Task<byte[]> ReadBoundedAsync(Stream stream, long maxBytes, CancellationToken cancellationToken)
         {
-            using var buffer = new MemoryStream(MaxPageSizeBytes);
+            using var buffer = new MemoryStream((int)Math.Min(maxBytes, int.MaxValue));
             var chunk = new byte[81920];
 
             while (true)
@@ -223,9 +256,9 @@ namespace WebParser.Parser
                     break;
                 }
 
-                if (buffer.Length + read > MaxPageSizeBytes)
+                if (buffer.Length + read > maxBytes)
                 {
-                    throw new PageTooLargeException(MaxPageSizeBytes);
+                    throw new PageTooLargeException((int)maxBytes);
                 }
 
                 buffer.Write(chunk, 0, read);

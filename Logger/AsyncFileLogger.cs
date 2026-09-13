@@ -3,17 +3,17 @@ using System.IO;
 using System.Text;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using WebParser.Config;
 
 namespace WebParser.Logger
 {
     public sealed class AsyncFileLogger : ILogger, IDisposable
     {
-        private const int QueueCapacity = 10000;
-        private const long MaxLogBytes = 8 * 1024 * 1024;
         private const int FlushMessageInterval = 200;
 
         private readonly Channel<ILogMessage> _channel;
         private readonly string _logFileName;
+        private readonly long _maxLogBytes;
         private readonly LogLevel _minLevel;
         private readonly Task _writerTask;
         private readonly StringBuilder _formatBuilder = new();
@@ -24,12 +24,13 @@ namespace WebParser.Logger
         private volatile bool _disposed;
         private volatile bool _writerFaulted;
 
-        public AsyncFileLogger(LogLevel minLevel = LogLevel.Info)
+        public AsyncFileLogger(LoggingOptions options, LogLevel minLevel)
         {
             _minLevel = minLevel;
-            _logFileName = GetLogFilePath();
+            _maxLogBytes = options.MaxFileSizeBytes;
+            _logFileName = ResolveLogPath(options.FilePath);
             _writer = new StreamWriter(_logFileName, append: true, Encoding.UTF8);
-            _channel = Channel.CreateBounded<ILogMessage>(new BoundedChannelOptions(QueueCapacity)
+            _channel = Channel.CreateBounded<ILogMessage>(new BoundedChannelOptions(options.QueueCapacity)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
@@ -72,7 +73,7 @@ namespace WebParser.Logger
                 {
                     WriteToFile(logMessage);
 
-                    if (_bytesWritten >= MaxLogBytes)
+                    if (_bytesWritten >= _maxLogBytes)
                     {
                         Rotate();
                     }
@@ -117,9 +118,9 @@ namespace WebParser.Logger
             _messagesSinceFlush = 0;
         }
 
-        private static string GetLogFilePath()
+        private static string ResolveLogPath(string filePath)
         {
-            return Path.Combine(AppContext.BaseDirectory, "log.txt");
+            return Path.IsPathRooted(filePath) ? filePath : Path.Combine(AppContext.BaseDirectory, filePath);
         }
     }
 }
