@@ -153,4 +153,4 @@
       (`PackageId/Authors/Company/Product`);
   L1: добавлены `AsyncFileLoggerTests` — запись + flush на `Dispose`, фильтрация сообщений ниже
       `MinLevel`, ротация по размеру (`.old` появляется, старые записи уезжают туда);
-  коммит `коммит-pending`.
+  коммит `bf2f8ee`.
