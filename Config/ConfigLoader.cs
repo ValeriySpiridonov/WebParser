@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using WebParser.Logger;
 
 namespace WebParser.Config
@@ -13,7 +12,7 @@ namespace WebParser.Config
             ReadCommentHandling = JsonCommentHandling.Skip,
             AllowTrailingCommas = true,
             PropertyNameCaseInsensitive = true,
-            Converters = { new JsonStringEnumConverter() }
+            Converters = { new LogLevelConverter() }
         };
 
         public static AppOptions Load(string? filePath = null)

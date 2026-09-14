@@ -104,7 +104,7 @@ namespace WebParser.Logger
 
             string line = _formatBuilder.ToString();
             _writer.WriteLine(line);
-            _bytesWritten += Encoding.UTF8.GetByteCount(line.AsSpan()) + 2;
+            _bytesWritten += Encoding.UTF8.GetByteCount(line.AsSpan()) + Encoding.UTF8.GetByteCount(Environment.NewLine);
             _messagesSinceFlush++;
         }
 

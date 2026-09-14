@@ -16,7 +16,7 @@ public class RunStatsTests
 
         Assert.Equal(2, snap.Processed);
         Assert.Equal(1, snap.Errors);
-        Assert.Equal(225, snap.AverageMs, 1);
+        Assert.Equal(200, snap.AverageMs, 1);
         Assert.True(snap.Elapsed > TimeSpan.Zero);
         Assert.True(snap.Rps > 0);
     }

@@ -8,14 +8,15 @@ namespace WebParser.Stats
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private long _processed;
         private long _errors;
-        private long _totalDurationMs;
+        private long _successDurationMs;
 
         public void Record(bool succeeded, TimeSpan duration)
         {
-            Interlocked.Add(ref _totalDurationMs, (long)duration.TotalMilliseconds);
+            long ticks = (long)duration.TotalMilliseconds;
             if (succeeded)
             {
                 Interlocked.Increment(ref _processed);
+                Interlocked.Add(ref _successDurationMs, ticks);
             }
             else
             {
@@ -27,10 +28,10 @@ namespace WebParser.Stats
         {
             long processed = Interlocked.Read(ref _processed);
             long errors = Interlocked.Read(ref _errors);
-            long totalDurationMs = Interlocked.Read(ref _totalDurationMs);
+            long successDurationMs = Interlocked.Read(ref _successDurationMs);
             TimeSpan elapsed = _clock.Elapsed;
             double rps = elapsed.TotalSeconds > 0 ? processed / elapsed.TotalSeconds : 0;
-            double averageMs = processed > 0 ? totalDurationMs / (double)processed : 0;
+            double averageMs = processed > 0 ? successDurationMs / (double)processed : 0;
             return (processed, errors, rps, averageMs, elapsed);
         }
 

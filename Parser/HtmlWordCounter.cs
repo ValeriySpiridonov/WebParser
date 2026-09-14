@@ -284,7 +284,7 @@ namespace WebParser.Parser
 
                 _tagName.Append(c);
 
-                if (_tagName.ToString() == "!--")
+                if (_tagName.Length == 3 && _tagName[0] == '!' && _tagName[1] == '-' && _tagName[2] == '-')
                 {
                     _mode = Mode.Comment;
                     _prev1 = '\0';

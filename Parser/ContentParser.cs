@@ -13,14 +13,16 @@ using WebParser.Logger;
 
 namespace WebParser.Parser
 {
-    public sealed class ContentParser : IContentParser
+    public sealed class ContentParser : IContentParser, IDisposable
     {
         private const int CharsetDetectBytes = 4 * 1024;
         private const int HostSemsPruneThreshold = 5000;
         private const long HostIdleMs = 10 * 60 * 1000;
+        private const long PruneCheckIntervalMs = 30 * 1000;
 
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _hostSems = new();
         private readonly ConcurrentDictionary<string, long> _hostLastUse = new();
+        private long _lastPruneCheck;
 
         private readonly ILogger _logger;
         private readonly HttpClient _http;
@@ -48,6 +50,11 @@ namespace WebParser.Parser
                     { "User-Agent", options.UserAgent }
                 }
             };
+        }
+
+        public void Dispose()
+        {
+            _http.Dispose();
         }
 
         public async Task<ParseResult> ParseAsync(string url, CancellationToken cancellationToken = default)
@@ -90,9 +97,14 @@ namespace WebParser.Parser
 
                 return new ParseResult(ParseOutcome.Success, words);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.Log(new LogMessage { Message = $"Прервано по таймауту: {url}" });
+                return new ParseResult(ParseOutcome.Failed);
             }
             catch (PageTooLargeException)
             {
@@ -199,12 +211,19 @@ namespace WebParser.Parser
 
         private void PruneHostSemsIfNeeded()
         {
+            long now = Environment.TickCount64;
+            if (now - _lastPruneCheck < PruneCheckIntervalMs)
+            {
+                return;
+            }
+
+            _lastPruneCheck = now;
+
             if (_hostSems.Count < HostSemsPruneThreshold)
             {
                 return;
             }
 
-            long now = Environment.TickCount64;
             foreach (string host in _hostSems.Keys)
             {
                 if (_hostLastUse.TryGetValue(host, out long last) && now - last > HostIdleMs)
@@ -218,56 +237,64 @@ namespace WebParser.Parser
         private async Task<IReadOnlyList<WordFrequency>> CountWordsAsync(HttpResponseMessage response, CancellationToken cancellationToken)
         {
             string? headerCharset = response.Content.Headers.ContentType?.CharSet;
+            Stream network = await response.Content.ReadAsStreamAsync(cancellationToken);
 
-            var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            byte[] body = await ReadBoundedAsync(stream, _options.MaxPageSizeBytes, cancellationToken);
-            Encoding encoding = ResolveEncoding(body, headerCharset);
-
-            using var reader = new StreamReader(new MemoryStream(body), encoding, detectEncodingFromByteOrderMarks: true);
-            var counter = new HtmlWordCounter();
+            byte[] prefix = ArrayPool<byte>.Shared.Rent(CharsetDetectBytes);
+            byte[] chunk = ArrayPool<byte>.Shared.Rent(81920);
             char[] buffer = ArrayPool<char>.Shared.Rent(8192);
 
             try
             {
-                int read;
-                while ((read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+                int prefixLen = await ReadPrefixAsync(network, prefix, chunk, _options.MaxPageSizeBytes, cancellationToken);
+                Encoding encoding = ResolveEncoding(prefix, prefixLen, headerCharset);
+
+                using var bounded = new BoundedReadStream(network, prefix, prefixLen, prefixLen, _options.MaxPageSizeBytes);
+                using var reader = new StreamReader(bounded, encoding, detectEncodingFromByteOrderMarks: true);
+                var counter = new HtmlWordCounter();
+
+                int left;
+                while ((left = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
                 {
-                    counter.Process(buffer.AsSpan(0, read));
+                    counter.Process(buffer.AsSpan(0, left));
                 }
 
                 return counter.Complete();
             }
             finally
             {
+                ArrayPool<byte>.Shared.Return(prefix);
+                ArrayPool<byte>.Shared.Return(chunk);
                 ArrayPool<char>.Shared.Return(buffer);
             }
         }
 
-        private static async Task<byte[]> ReadBoundedAsync(Stream stream, long maxBytes, CancellationToken cancellationToken)
+        private static async Task<int> ReadPrefixAsync(Stream stream, byte[] prefix, byte[] chunk, long maxBytes, CancellationToken cancellationToken)
         {
-            using var buffer = new MemoryStream((int)Math.Min(maxBytes, int.MaxValue));
-            var chunk = new byte[81920];
-
-            while (true)
+            int prefixLen = 0;
+            long total = 0;
+            while (prefixLen < CharsetDetectBytes)
             {
-                int read = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), cancellationToken);
+                int toRead = Math.Min(chunk.Length, CharsetDetectBytes - prefixLen);
+                int read = await stream.ReadAsync(chunk.AsMemory(0, toRead), cancellationToken);
                 if (read == 0)
                 {
                     break;
                 }
 
-                if (buffer.Length + read > maxBytes)
+                total += read;
+                if (total > maxBytes)
                 {
                     throw new PageTooLargeException((int)maxBytes);
                 }
 
-                buffer.Write(chunk, 0, read);
+                Array.Copy(chunk, 0, prefix, prefixLen, read);
+                prefixLen += read;
             }
 
-            return buffer.ToArray();
+            return prefixLen;
         }
 
-        private static Encoding ResolveEncoding(byte[] body, string? headerCharset)
+        private static Encoding ResolveEncoding(byte[] body, int length, string? headerCharset)
         {
             Encoding? encoding = GetEncodingSafe(headerCharset);
             if (encoding != null)
@@ -275,7 +302,71 @@ namespace WebParser.Parser
                 return encoding;
             }
 
-            return GetEncodingFromMeta(body) ?? Encoding.UTF8;
+            return GetEncodingFromMeta(body, length) ?? Encoding.UTF8;
+        }
+
+        private sealed class BoundedReadStream : Stream
+        {
+            private readonly Stream _inner;
+            private readonly byte[] _prefix;
+            private readonly int _prefixLen;
+            private readonly long _maxBytes;
+            private int _prefixPos;
+            private long _total;
+
+            public BoundedReadStream(Stream inner, byte[] prefix, int prefixLen, long total, long maxBytes)
+            {
+                _inner = inner;
+                _prefix = prefix;
+                _prefixLen = prefixLen;
+                _total = total;
+                _maxBytes = maxBytes;
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                return ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+            }
+
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                if (_prefixPos < _prefixLen)
+                {
+                    int n = Math.Min(buffer.Length, _prefixLen - _prefixPos);
+                    _prefix.AsMemory(_prefixPos, n).CopyTo(buffer);
+                    _prefixPos += n;
+                    _total += n;
+                    EnsureWithinLimit();
+                    return n;
+                }
+
+                int read = await _inner.ReadAsync(buffer, cancellationToken);
+                _total += read;
+                EnsureWithinLimit();
+                return read;
+            }
+
+            private void EnsureWithinLimit()
+            {
+                if (_total > _maxBytes)
+                {
+                    throw new PageTooLargeException((int)_maxBytes);
+                }
+            }
+
+            public override void Flush()
+            {
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
 
         private static Encoding? GetEncodingSafe(string? charset)
@@ -299,10 +390,10 @@ namespace WebParser.Parser
             }
         }
 
-        private static Encoding? GetEncodingFromMeta(byte[] body)
+        private static Encoding? GetEncodingFromMeta(byte[] body, int length)
         {
-            int length = Math.Min(body.Length, CharsetDetectBytes);
-            string head = Encoding.ASCII.GetString(body, 0, length);
+            int window = Math.Min(length, CharsetDetectBytes);
+            string head = Encoding.ASCII.GetString(body, 0, window);
 
             int marker = head.IndexOf("charset=", StringComparison.OrdinalIgnoreCase);
             if (marker < 0)

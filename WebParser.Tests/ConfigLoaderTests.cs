@@ -80,6 +80,23 @@ public class ConfigLoaderTests
     }
 
     [Fact]
+    public void TypoInMinLevel_FallsBackToDefaultConfig()
+    {
+        string path = TempFile("""
+            {
+              "logging": {
+                "minLevel": "SeriousError"
+              }
+            }
+            """);
+
+        AppOptions options = ConfigLoader.Load(path);
+
+        Assert.Equal(LogLevel.Info, options.Logging.MinLevel);
+        Assert.Equal(10, options.Crawler.MaxConcurrency);
+    }
+
+    [Fact]
     public void OutOfRangeValues_AreClamped()
     {
         string path = TempFile("""

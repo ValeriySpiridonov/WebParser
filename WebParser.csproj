@@ -5,10 +5,6 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <PackageId>TravelLine.CodeReview</PackageId>
-    <Authors>TravelLine.CodeReview</Authors>
-    <Company>TravelLine.CodeReview</Company>
-    <Product>TravelLine.CodeReview</Product>
   </PropertyGroup>
 
   <ItemGroup>

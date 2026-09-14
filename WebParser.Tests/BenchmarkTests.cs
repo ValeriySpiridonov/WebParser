@@ -27,7 +27,7 @@ public class BenchmarkTests
             TimeoutSeconds = 10,
             RetryBaseDelayMs = 5
         };
-        var parser = new ContentParser(new NullLogger(), options);
+        using var parser = new ContentParser(new NullLogger(), options);
         string[] urls = Enumerable.Range(0, 500).Select(i => server.BaseUrl + "p" + i).ToArray();
 
         long startMem = GC.GetTotalMemory(forceFullCollection: true);

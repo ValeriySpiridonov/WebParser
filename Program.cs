@@ -31,7 +31,7 @@ namespace WebParser
 
             var loggerMinLevel = verbose ? LogLevel.Verbose : options.Logging.MinLevel;
             using var logger = new AsyncFileLogger(options.Logging, loggerMinLevel);
-            var parser = new ContentParser(logger, options.Crawler, verbose);
+            using var parser = new ContentParser(logger, options.Crawler, verbose);
             var stats = new RunStats();
 
             using var schedCts = new CancellationTokenSource();

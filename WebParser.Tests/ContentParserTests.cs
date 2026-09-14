@@ -135,7 +135,7 @@ public class ContentParserTests
     }
 
     [Fact]
-    public async Task Timeout_SurfacesAsCancellation_AfterRetries()
+    public async Task Timeout_YieldsFailed_AfterRetries()
     {
         using var server = new StubHttpServer(_ => new StubHttpServer.Response
         {
@@ -146,8 +146,36 @@ public class ContentParserTests
         });
         var parser = new ContentParser(new NullLogger(), Options(maxAttempts: 2, timeoutSeconds: 1));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ParseAsync(parser, server, "/slow"));
+        ParseResult result = await ParseAsync(parser, server, "/slow");
+
+        Assert.Equal(ParseOutcome.Failed, result.Outcome);
         Assert.Equal(2, server.Hits("/slow"));
+    }
+
+    [Fact]
+    public async Task CallerCancellation_StillThrows()
+    {
+        using var server = new StubHttpServer(_ => StubHttpServer.Response.Html("<p>x</p>"));
+        var parser = new ContentParser(new NullLogger(), Options());
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => parser.ParseAsync(server.BaseUrl + "cancel", cts.Token));
+    }
+
+    [Fact]
+    public async Task CharsetBom_OverridesHeader()
+    {
+        byte[] body = Encoding.UTF8.GetPreamble()
+            .Concat(Encoding.UTF8.GetBytes("<p>Привет мир</p>"))
+            .ToArray();
+        using var server = new StubHttpServer(_ => StubHttpServer.Response.Raw(body, "text/html; charset=windows-1251"));
+        var parser = new ContentParser(new NullLogger(), Options());
+
+        ParseResult result = await ParseAsync(parser, server, "/bom");
+
+        Assert.Equal(new[] { new WordFrequency("мир", 1), new WordFrequency("привет", 1) }, result.Words);
     }
 
     [Fact]
