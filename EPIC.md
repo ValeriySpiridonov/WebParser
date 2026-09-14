@@ -154,3 +154,21 @@
   L1: добавлены `AsyncFileLoggerTests` — запись + flush на `Dispose`, фильтрация сообщений ниже
       `MinLevel`, ротация по размеру (`.old` появляется, старые записи уезжают туда);
   коммит `bf2f8ee`.
+- Follow-up после review (55 тестов, `dotnet test` зелёный / 9 s) — оптимизация памяти, гигиена, стенд:
+  `HtmlWordCounter` полностью на спанах — `ResolveEntity(ReadOnlySpan<char>)`, `int.TryParse` без
+  `Substring`, именованные entity через `Span.Equals(...OrdinalIgnoreCase)` без `ToLowerInvariant()`,
+  `_entity` (StringBuilder) → `char[12] + _entityLen`; чистка redundant/implicit using по всему решению;
+  `AsyncFileLogger` — `Console` вынесен через `errorSink` (`TextWriter`, в `Program` — `Console.Error`),
+  ctor больше не бросает при недоступном пути (fallback на `StreamWriter(Stream.Null)` + `_writerFaulted`,
+  сообщение в errorSink), `Dispose` обёрнут в try/catch, при fault воркера — `_channel.Writer.TryComplete()`
+  (нет ханга при полной очереди), запись без агрегатной строки: `DateTime.TryFormat` в `stackalloc char[32]`
+  + сегментные `Write`, байт-счёт по сегментам (новый тест `InvalidLogPath_DoesNotThrow_AndDegradesSafely`);
+  `ContentParser` — детект `<meta charset>` без декодирования всего ASCII-префикса в строку: поиск паттерна
+  `charset=` прямо в `byte[]` (case-insensitive) + декод окна ≤128 байт (~8 КБ аллокаций на страницу
+  fallback-пути убрано); `WebParser.csproj` — `<None Remove="WebParser.Tests\**" />`;
+  `StubHttpServer` — keep-alive (цикл запросов на одной связи, раньше `Connection: close` = новая TCP-связь
+  на каждый запрос), backlog 1024, `BufferedLineReader` (чтение батчами 4 КБ вместо по 1 байту);
+  бенчмарк разбит на два: `Load500Urls_AllSucceed` (500 URL, 100% успех) и
+  `Load500000Urls_HighThroughput_StableMemory` (500 000 URL, порог 99%, ~9 s, RPS≈53 000, рост памяти
+  ≈48 МБ — стенд больше не теряет соединения на флуде, раньше 45 232 отказа на 500k);
+  коммит `5673174`.
