@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace WebParser.Logger
+﻿namespace WebParser.Logger
 {
     public enum LogLevel
     {

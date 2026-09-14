@@ -1,5 +1,3 @@
-using System;
-
 namespace WebParser.Parser
 {
     public sealed class PageTooLargeException : Exception

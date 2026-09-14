@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <Compile Remove="WebParser.Tests\**" />
+    <None Remove="WebParser.Tests\**" />
   </ItemGroup>
 
 </Project>

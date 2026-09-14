@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using System.Diagnostics;
 using WebParser.Config;
 using WebParser.Logger;
 using WebParser.Parser;
@@ -30,7 +24,7 @@ namespace WebParser
             }
 
             var loggerMinLevel = verbose ? LogLevel.Verbose : options.Logging.MinLevel;
-            using var logger = new AsyncFileLogger(options.Logging, loggerMinLevel);
+            using var logger = new AsyncFileLogger(options.Logging, loggerMinLevel, Console.Error);
             using var parser = new ContentParser(logger, options.Crawler, verbose);
             var stats = new RunStats();
 

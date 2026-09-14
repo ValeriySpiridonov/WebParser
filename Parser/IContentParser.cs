@@ -1,7 +1,4 @@
-﻿using System.Threading;
-using System.Threading.Tasks;
-
-namespace WebParser.Parser
+﻿namespace WebParser.Parser
 {
     public interface IContentParser
     {

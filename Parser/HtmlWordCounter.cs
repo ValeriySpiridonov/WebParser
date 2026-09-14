@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
 using System.Text;
 
 namespace WebParser.Parser
@@ -38,7 +35,8 @@ namespace WebParser.Parser
         private readonly Dictionary<string, int> _counts = new Dictionary<string, int>(StringComparer.Ordinal);
         private readonly StringBuilder _word = new StringBuilder(32);
         private readonly StringBuilder _tagName = new StringBuilder(32);
-        private readonly StringBuilder _entity = new StringBuilder(8);
+        private readonly char[] _entityBuffer = new char[12];
+        private int _entityLen;
 
         private Mode _mode;
         private bool _inQuotes;
@@ -111,7 +109,7 @@ namespace WebParser.Parser
             else if (c == '&')
             {
                 _inEntity = true;
-                _entity.Clear();
+                _entityLen = 0;
             }
             else if (IsWordChar(c))
             {
@@ -127,8 +125,8 @@ namespace WebParser.Parser
         {
             if (c == ';')
             {
-                char? resolved = ResolveEntity(_entity.ToString());
-                _entity.Clear();
+                char? resolved = ResolveEntity(_entityBuffer.AsSpan(0, _entityLen));
+                _entityLen = 0;
                 _inEntity = false;
 
                 if (resolved.HasValue)
@@ -143,10 +141,10 @@ namespace WebParser.Parser
                 return;
             }
 
-            if (_entity.Length >= 12)
+            if (_entityLen >= 12)
             {
                 _inEntity = false;
-                _entity.Clear();
+                _entityLen = 0;
                 FlushWord();
                 ProcessTextChar(c);
                 return;
@@ -155,13 +153,13 @@ namespace WebParser.Parser
             if (c != '#' && !char.IsLetterOrDigit(c))
             {
                 _inEntity = false;
-                _entity.Clear();
+                _entityLen = 0;
                 FlushWord();
                 ProcessTextChar(c);
                 return;
             }
 
-            _entity.Append(c);
+            _entityBuffer[_entityLen++] = c;
         }
 
         private void FeedResolvedChar(char c)
@@ -176,24 +174,24 @@ namespace WebParser.Parser
             }
         }
 
-        private static char? ResolveEntity(string entity)
+        private static char? ResolveEntity(ReadOnlySpan<char> entity)
         {
-            if (entity.Length == 0)
+            if (entity.IsEmpty)
             {
                 return null;
             }
 
             if (entity[0] == '#')
             {
-                int codePoint;
-                if (entity.Length > 1 && (entity[1] == 'x' || entity[1] == 'X'))
+                ReadOnlySpan<char> digits = entity.Slice(1);
+                NumberStyles style = NumberStyles.None;
+                if (digits.Length > 0 && (digits[0] == 'x' || digits[0] == 'X'))
                 {
-                    if (!int.TryParse(entity.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out codePoint))
-                    {
-                        return null;
-                    }
+                    digits = digits.Slice(1);
+                    style = NumberStyles.HexNumber;
                 }
-                else if (!int.TryParse(entity.Substring(1), NumberStyles.None, CultureInfo.InvariantCulture, out codePoint))
+
+                if (!int.TryParse(digits, style, CultureInfo.InvariantCulture, out int codePoint))
                 {
                     return null;
                 }
@@ -206,16 +204,13 @@ namespace WebParser.Parser
                 return (char)codePoint;
             }
 
-            return entity.ToLowerInvariant() switch
-            {
-                "nbsp" => ' ',
-                "amp" => '&',
-                "lt" => '<',
-                "gt" => '>',
-                "quot" => '"',
-                "apos" => '\'',
-                _ => null
-            };
+            return entity.Equals("nbsp".AsSpan(), StringComparison.OrdinalIgnoreCase) ? ' ' :
+                   entity.Equals("amp".AsSpan(), StringComparison.OrdinalIgnoreCase) ? '&' :
+                   entity.Equals("lt".AsSpan(), StringComparison.OrdinalIgnoreCase) ? '<' :
+                   entity.Equals("gt".AsSpan(), StringComparison.OrdinalIgnoreCase) ? '>' :
+                   entity.Equals("quot".AsSpan(), StringComparison.OrdinalIgnoreCase) ? '"' :
+                   entity.Equals("apos".AsSpan(), StringComparison.OrdinalIgnoreCase) ? '\'' :
+                   null;
         }
 
         private void StartTag(bool fromSkip)

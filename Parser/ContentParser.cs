@@ -1,13 +1,7 @@
-﻿using System;
-using System.Buffers;
+﻿using System.Buffers;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
 using System.Net;
-using System.Net.Http;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using WebParser.Config;
 using WebParser.Logger;
 
@@ -19,6 +13,7 @@ namespace WebParser.Parser
         private const int HostSemsPruneThreshold = 5000;
         private const long HostIdleMs = 10 * 60 * 1000;
         private const long PruneCheckIntervalMs = 30 * 1000;
+        private static readonly byte[] MetaCharsetPattern = Encoding.ASCII.GetBytes("charset=");
 
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _hostSems = new();
         private readonly ConcurrentDictionary<string, long> _hostLastUse = new();
@@ -393,22 +388,57 @@ namespace WebParser.Parser
         private static Encoding? GetEncodingFromMeta(byte[] body, int length)
         {
             int window = Math.Min(length, CharsetDetectBytes);
-            string head = Encoding.ASCII.GetString(body, 0, window);
-
-            int marker = head.IndexOf("charset=", StringComparison.OrdinalIgnoreCase);
+            int marker = IndexOfCharsetPattern(body, window);
             if (marker < 0)
             {
                 return null;
             }
 
-            int start = marker + "charset=".Length;
-            int end = start;
-            while (end < head.Length && !IsDelimiter(head[end]))
+            int start = marker + MetaCharsetPattern.Length;
+            int end = Math.Min(window, start + 128);
+            string name = Encoding.ASCII.GetString(body, start, end - start);
+            int nameEnd = 0;
+            while (nameEnd < name.Length && !IsDelimiter(name[nameEnd]))
             {
-                end++;
+                nameEnd++;
             }
 
-            return GetEncodingSafe(head.Substring(start, end - start).Trim());
+            return GetEncodingSafe(name.AsSpan(0, nameEnd).Trim().ToString());
+        }
+
+        private static int IndexOfCharsetPattern(byte[] data, int length)
+        {
+            ReadOnlySpan<byte> pattern = MetaCharsetPattern;
+            ReadOnlySpan<byte> source = data.AsSpan(0, length);
+            for (int i = 0; i + pattern.Length <= source.Length; i++)
+            {
+                if (LowerAscii(source[i]) != pattern[0])
+                {
+                    continue;
+                }
+
+                bool matched = true;
+                for (int j = 1; j < pattern.Length; j++)
+                {
+                    if (LowerAscii(source[i + j]) != pattern[j])
+                    {
+                        matched = false;
+                        break;
+                    }
+                }
+
+                if (matched)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private static byte LowerAscii(byte b)
+        {
+            return b is >= (byte)'A' and <= (byte)'Z' ? (byte)(b | 0x20) : b;
         }
 
         private static bool IsDelimiter(char c)

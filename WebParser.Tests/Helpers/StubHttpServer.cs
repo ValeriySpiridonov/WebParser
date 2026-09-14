@@ -41,7 +41,7 @@ internal sealed class StubHttpServer : IDisposable
     {
         _handler = handler;
         _listener = new TcpListener(IPAddress.Loopback, 0);
-        _listener.Start();
+        _listener.Start(1024);
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         BaseUrl = $"http://127.0.0.1:{Port}/";
         _acceptLoop = Task.Run(AcceptLoopAsync);
@@ -99,28 +99,38 @@ internal sealed class StubHttpServer : IDisposable
                 try
                 {
                     using NetworkStream stream = client.GetStream();
-                    string? requestLine = await ReadLineAsync(stream, _cts.Token);
-                    if (requestLine is null)
+                    var reader = new BufferedLineReader(stream);
+
+                    while (true)
                     {
-                        return;
+                        string? requestLine = await reader.ReadLineAsync(_cts.Token);
+                        if (requestLine is null)
+                        {
+                            return;
+                        }
+
+                        if (requestLine.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        string[] parts = requestLine.Split(' ');
+                        string path = parts.Length > 1 ? parts[1] : "/";
+
+                        while (await reader.ReadLineAsync(_cts.Token) is not { Length: 0 })
+                        {
+                        }
+
+                        _hits.AddOrUpdate(path, 1, (_, count) => count + 1);
+                        Response? response = _handler(path) ?? new Response { StatusCode = 404 };
+
+                        if (response.DelayMs > 0)
+                        {
+                            await Task.Delay(response.DelayMs, _cts.Token);
+                        }
+
+                        await WriteResponseAsync(stream, response, _cts.Token);
                     }
-
-                    string[] parts = requestLine.Split(' ');
-                    string path = parts.Length > 1 ? parts[1] : "/";
-
-                    while (!(await ReadLineAsync(stream, _cts.Token) is { Length: 0 }))
-                    {
-                    }
-
-                    _hits.AddOrUpdate(path, 1, (_, count) => count + 1);
-                    Response? response = _handler(path) ?? new Response { StatusCode = 404 };
-
-                    if (response.DelayMs > 0)
-                    {
-                        await Task.Delay(response.DelayMs, _cts.Token);
-                    }
-
-                    await WriteResponseAsync(stream, response, _cts.Token);
                 }
                 finally
                 {
@@ -139,31 +149,56 @@ internal sealed class StubHttpServer : IDisposable
         }
     }
 
-    private static async Task<string?> ReadLineAsync(NetworkStream stream, CancellationToken token)
+    private sealed class BufferedLineReader
     {
-        var line = new StringBuilder();
-        var buffer = new byte[1];
-        int prev = -1;
+        private readonly Stream _inner;
+        private readonly byte[] _buffer = new byte[4096];
+        private int _pos;
+        private int _len;
 
-        while (true)
+        public BufferedLineReader(Stream inner)
         {
-            int read = await stream.ReadAsync(buffer, 0, 1, token);
-            if (read == 0)
-            {
-                return line.Length == 0 ? null : line.ToString();
-            }
+            _inner = inner;
+        }
 
-            if (buffer[0] == '\n')
+        public async ValueTask<string?> ReadLineAsync(CancellationToken token)
+        {
+            var line = new StringBuilder();
+            while (true)
             {
-                if (prev == '\r')
+                int b = await ReadByteAsync(token);
+                if (b < 0)
                 {
-                    line.Length--;
+                    return line.Length == 0 ? null : line.ToString();
                 }
-                return line.ToString();
+
+                if (b == '\n')
+                {
+                    if (line.Length > 0 && line[^1] == '\r')
+                    {
+                        line.Length--;
+                    }
+
+                    return line.ToString();
+                }
+
+                line.Append((char)b);
+            }
+        }
+
+        private async ValueTask<int> ReadByteAsync(CancellationToken token)
+        {
+            if (_pos == _len)
+            {
+                _pos = 0;
+                _len = await _inner.ReadAsync(_buffer.AsMemory(0, _buffer.Length), token);
+                if (_len == 0)
+                {
+                    return -1;
+                }
             }
 
-            line.Append((char)buffer[0]);
-            prev = buffer[0];
+            return _buffer[_pos++];
         }
     }
 
@@ -174,7 +209,7 @@ internal sealed class StubHttpServer : IDisposable
         head.Append("HTTP/1.1 ").Append(response.StatusCode).Append(' ').Append(StatusText(response.StatusCode)).Append("\r\n");
         head.Append("Content-Type: ").Append(response.ContentType ?? "application/octet-stream").Append("\r\n");
         head.Append("Content-Length: ").Append(body.Length).Append("\r\n");
-        head.Append("Connection: close\r\n\r\n");
+        head.Append("Connection: keep-alive\r\n\r\n");
 
         byte[] headBytes = Encoding.ASCII.GetBytes(head.ToString());
         await stream.WriteAsync(headBytes, 0, headBytes.Length, token);

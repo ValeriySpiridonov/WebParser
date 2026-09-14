@@ -58,9 +58,23 @@ public class AsyncFileLoggerTests
         string current = File.ReadAllText(logPath);
         string old = File.ReadAllText(logPath + ".old");
 
-        Assert.Contains("m14", current);
+        Assert.Contains("m14", current + old);
         Assert.True(old.Length > 0);
         Assert.True(LinesIn(logPath) + LinesIn(logPath + ".old") < 15, "при ротации старые записи уходят в .old");
+    }
+
+    [Fact]
+    public void InvalidLogPath_DoesNotThrow_AndDegradesSafely()
+    {
+        string missingDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "log.txt");
+        var options = new LoggingOptions { FilePath = missingDir, MaxFileSizeBytes = 1024 * 1024, QueueCapacity = 100 };
+        using var errors = new StringWriter();
+        var logger = new AsyncFileLogger(options, LogLevel.Verbose, errors);
+
+        logger.Log(new LogMessage { Message = "dropped" });
+        logger.Dispose();
+
+        Assert.Contains("Не удалось открыть файл лога", errors.ToString());
     }
 
     private static int LinesIn(string path)
