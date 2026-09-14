@@ -110,6 +110,7 @@ namespace WebParser
 
             try
             {
+                Console.WriteLine("Нажмите любую клавишу для выхода...");
                 Console.ReadKey();
             }
             catch (InvalidOperationException)

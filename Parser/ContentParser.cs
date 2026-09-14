@@ -108,7 +108,9 @@ namespace WebParser.Parser
             }
             catch (Exception ex)
             {
-                _logger.Log(new LogMessage { Message = $"Ошибка при обработке адреса {url}", Exception = ex });
+                _logger.Log(_verbose
+                    ? new LogMessage { Message = $"Ошибка при обработке адреса {url}", Exception = ex }
+                    : new LogMessage { Message = $"Ошибка при обработке адреса {url}: {ex.Message}" });
                 return new ParseResult(ParseOutcome.Failed);
             }
         }
