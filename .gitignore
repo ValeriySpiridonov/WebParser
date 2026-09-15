@@ -3,3 +3,4 @@ obj/
 .vs/
 log.txt
 *.user
+urls-*.txt

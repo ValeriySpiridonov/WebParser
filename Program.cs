@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using WebParser.Config;
 using WebParser.Logger;
 using WebParser.Parser;
@@ -24,8 +25,32 @@ namespace WebParser
             }
 
             var loggerMinLevel = verbose ? LogLevel.Verbose : options.Logging.MinLevel;
-            using var logger = new AsyncFileLogger(options.Logging, loggerMinLevel, Console.Error);
-            using var parser = new ContentParser(logger, options.Crawler, verbose);
+
+            var services = new ServiceCollection();
+            services.AddSingleton(options.Crawler);
+            services.AddSingleton(options.Logging);
+            services.AddSingleton<ILogger>(sp => new AsyncFileLogger(
+                sp.GetRequiredService<LoggingOptions>(),
+                loggerMinLevel,
+                Console.Error));
+            services.AddSingleton<IHttpFetcher>(sp => new HttpFetcher(
+                sp.GetRequiredService<CrawlerOptions>(),
+                sp.GetRequiredService<ILogger>()));
+            services.AddSingleton<IHostRateLimiter>(sp => new HostRateLimiter(
+                sp.GetRequiredService<CrawlerOptions>().MaxConcurrentPerHost));
+            services.AddSingleton<IContentParser>(sp => new ContentParser(
+                sp.GetRequiredService<ILogger>(),
+                sp.GetRequiredService<CrawlerOptions>(),
+                sp.GetRequiredService<IHttpFetcher>(),
+                sp.GetRequiredService<IHostRateLimiter>()));
+
+            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateOnBuild = true,
+                ValidateScopes = true
+            });
+            var logger = provider.GetRequiredService<ILogger>();
+            var parser = provider.GetRequiredService<IContentParser>();
             var stats = new RunStats();
 
             using var schedCts = new CancellationTokenSource();
@@ -65,9 +90,16 @@ namespace WebParser
                     async (url, ct) =>
                     {
                         var sw = Stopwatch.StartNew();
-                        bool succeeded = (await parser.ParseAsync(url, hardCts.Token)).Succeeded;
+                        var result = await parser.ParseAsync(url, hardCts.Token);
                         sw.Stop();
-                        stats.Record(succeeded, sw.Elapsed);
+                        stats.Record(result.Succeeded, sw.Elapsed);
+                        if (verbose && result.Outcome == ParseOutcome.Success && result.Words is { } words)
+                        {
+                            foreach (var item in words)
+                            {
+                                Console.WriteLine($"Слово: {item.Word}\tКоличество повторов: {item.Frequency}");
+                            }
+                        }
                     });
 
                 logger.Log(new LogMessage { Message = "Обработка завершена" });
