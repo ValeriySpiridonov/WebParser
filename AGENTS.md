@@ -14,24 +14,27 @@
   (файл/аргумент или stdin), `Parallel.ForEachAsync` по `MaxConcurrency`, Ctrl+C → graceful shutdown
   (стоп планирования, текущие запросы доживают до 5 с, затем жёсткая отмена), прогресс-цикл (`\r`,
   не-verbose), итоговая строка.
-- `Config/AppOptions.cs`, `Config/ConfigLoader.cs`, `Config/LogLevelConverter.cs` — POCO опции (Crawler/Logging),
+- `Config/AppOptions.cs`, `Config/CrawlerOptions.cs`, `Config/LoggingOptions.cs`, `Config/ConfigLoader.cs`, `Config/LogLevelConverter.cs` — POCO опции (Crawler/Logging),
   загрузка + кламп; конвертер `LogLevel` терпим к опечаткам/числам (fallback → `Info`).
 - `Stats/RunStats.cs` — метрики: обработано / ошибок / RPS / среднее время / прошедшее время.
-- `Parser/IContentParser.cs`, `Parser/ParseResult.cs`, `Parser/ContentParser.cs` — парсинг одной страницы:
+- `Parser/IContentParser.cs`, `Parser/ParseResult.cs`, `Parser/ParseOutcome.cs`, `Parser/ContentParser.cs` — парсинг одной страницы:
   retry (из опций, backoff+jitter, `Retry-After`), per-host лимит (из опций), лимит размера страницы (из
   опций), charset из заголовка + `<meta charset>`, стриминговое чтение тела без буферизации в `byte[]`;
   `ParseAsync` возвращает `Task<ParseResult>`; OCE перевыбрасывается только при реальной отмене токена,
   сетевой таймаут даёт `Failed`; `ContentParser : IDisposable` (владеет `HttpClient`).
-- `Parser/HtmlWordCounter.cs` — стриминговый single-pass разбор текста (state machine, без DOM): блок-разделители, пропуск script/style/textarea, комментарии, entities; `WordFrequency`.
+- `Parser/HtmlWordCounter.cs` — стриминговый single-pass разбор текста (state machine, без DOM): блок-разделители, пропуск script/style/textarea, комментарии, entities; `WordFrequency` — в `Parser/WordFrequency.cs`.
 - `Parser/PageTooLargeException.cs` — выбрасывается при превышении лимита страницы.
-- `Logger/ILogger.cs`, `ILogMessage.cs`, `LogMessage.cs` (`required Message`, `Exception?`, `Level`), `AsyncFileLogger.cs` — Channel-логгер из опций (ротация по размеру, уровни). `LogLevel` определён в `ILogMessage.cs`.
+- `Logger/ILogger.cs`, `ILogMessage.cs`, `LogMessage.cs` (`required Message`, `Exception?`, `Level`), `AsyncFileLogger.cs` — Channel-логгер из опций (ротация по размеру, уровни). `LogLevel` — отдельный файл `LogLevel.cs`.
 - `WebParser.Tests/` (xUnit) — юнит-тесты `HtmlWordCounter`/`ConfigLoader`/`RunStats`/`AsyncFileLogger`,
   интеграционные `ContentParser` + `StubHttpServer` (локальный `TcpListener`-сервер), бенчмарк-прогон;
   helpers: `TestLogger`, `NullLogger`, `StubHttpServer`. Основной csproj исключает `WebParser.Tests\**` из компиляции.
 - `appsettings.json` — шаблон конфигурации (факультатив; отсутствие файла → дефолты).
 
 ## Конвенции
-- Без комментариев в коде, если не просили.
+- Комментарии в коде — только для неочевидных мест, где у читателя может возникнуть вопрос «а почему так сделано?»; не комментировать очевидный код.
+- Каждый top-level класс, интерфейс, структура и енам — в отдельном файле (приватные вложенные типы остаются в файле владельца).
+- Все публичные типы и их публичные члены (методы, свойства, конструкторы и т.п.) снабжаются кратким xmldoc на русском языке.
+- При реализации интерфейса с xmldoc не дублировать его дословно в классе — использовать `/// <inheritdoc />`; собственный xmldoc пишется только если описание поведения реализации отличается от контракта.
 - UI-строки на русском, как в существующем коде.
 - Интерфейсы для ключевых компонентов (`ILogger`, `IContentParser`).
 - Namespaces: `WebParser.Parser`, `WebParser.Logger`, `WebParser.Config`, `WebParser.Stats`.

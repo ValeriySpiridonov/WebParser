@@ -2,6 +2,9 @@ using System.Text.Json;
 
 namespace WebParser.Config
 {
+    /// <summary>
+    /// Загружает конфигурацию приложения из JSON-файла и нормализует её значения.
+    /// </summary>
     public static class ConfigLoader
     {
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -12,6 +15,11 @@ namespace WebParser.Config
             Converters = { new LogLevelConverter() }
         };
 
+        /// <summary>
+        /// Загружает и нормализует конфигурацию. При отсутствии или ошибке файла возвращает дефолты.
+        /// </summary>
+        /// <param name="filePath">Путь к файлу конфигурации; если не указан — appsettings.json.</param>
+        /// <returns>Нормализованные параметры приложения.</returns>
         public static AppOptions Load(string? filePath = null)
         {
             AppOptions? options = null;

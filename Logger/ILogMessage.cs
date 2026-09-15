@@ -1,16 +1,17 @@
 ﻿namespace WebParser.Logger
 {
-    public enum LogLevel
-    {
-        Verbose = 0,
-        Info = 1,
-        Error = 2
-    }
-
+    /// <summary>
+    /// Сообщение журнала: текст, уровень важности и опциональное исключение.
+    /// </summary>
     public interface ILogMessage
     {
+        /// <summary>Текст сообщения.</summary>
         string Message { get; }
+
+        /// <summary>Исключение, связанное с сообщением, либо null.</summary>
         Exception? Exception { get; }
+
+        /// <summary>Уровень важности сообщения.</summary>
         LogLevel Level { get; }
     }
 }

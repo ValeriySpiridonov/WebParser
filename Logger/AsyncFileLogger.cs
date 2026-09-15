@@ -4,6 +4,9 @@ using WebParser.Config;
 
 namespace WebParser.Logger
 {
+    /// <summary>
+    /// Асинхронный логгер в файл: очередь сообщений, ротация по размеру, фильтрация по уровню.
+    /// </summary>
     public sealed class AsyncFileLogger : ILogger, IDisposable
     {
         private const int FlushMessageInterval = 200;
@@ -21,6 +24,12 @@ namespace WebParser.Logger
         private volatile bool _disposed;
         private volatile bool _writerFaulted;
 
+        /// <summary>
+        /// Создаёт асинхронный логгер и запускает фоновый цикл записи.
+        /// </summary>
+        /// <param name="options">Параметры логирования: путь, лимит размера, вместимость очереди.</param>
+        /// <param name="minLevel">Минимальный уровень записываемых сообщений.</param>
+        /// <param name="errorSink">Поток для вывода ошибок логгера; по умолчанию — без вывода.</param>
         public AsyncFileLogger(LoggingOptions options, LogLevel minLevel, TextWriter? errorSink = null)
         {
             _minLevel = minLevel;
@@ -48,6 +57,10 @@ namespace WebParser.Logger
             _writerTask = Task.Run(WriteLoopAsync);
         }
 
+        /// <summary>
+        /// Ставит сообщение в очередь записи, если его уровень проходит фильтр.
+        /// </summary>
+        /// <param name="logMessage">Сообщение для записи.</param>
         public void Log(ILogMessage logMessage)
         {
             if (_disposed || _writerFaulted) return;
@@ -66,6 +79,9 @@ namespace WebParser.Logger
             }
         }
 
+        /// <summary>
+        /// Завершает запись: закрывает очередь, ожидает выгрузку сообщений и освобождает файл.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed) return;

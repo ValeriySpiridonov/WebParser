@@ -7,6 +7,9 @@ using WebParser.Logger;
 
 namespace WebParser.Parser
 {
+    /// <summary>
+    /// Скачивает страницу по адресу, парсит текст и считает частоту слов.
+    /// </summary>
     public sealed class ContentParser : IContentParser, IDisposable
     {
         private const int CharsetDetectBytes = 4 * 1024;
@@ -29,6 +32,12 @@ namespace WebParser.Parser
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         }
 
+        /// <summary>
+        /// Создаёт обработчик страниц с указанными параметрами и общим HTTP-клиентом.
+        /// </summary>
+        /// <param name="logger">Журнал для событий обработки.</param>
+        /// <param name="options">Параметры краулера.</param>
+        /// <param name="verbose">True — выводить слова в консоль и детальные ошибки.</param>
         public ContentParser(ILogger logger, CrawlerOptions options, bool verbose = false)
         {
             _logger = logger;
@@ -47,11 +56,20 @@ namespace WebParser.Parser
             };
         }
 
+        /// <summary>
+        /// Освобождает HTTP-клиент, используемый для скачивания страниц.
+        /// </summary>
         public void Dispose()
         {
             _http.Dispose();
         }
 
+        /// <summary>
+        /// Скачивает страницу по адресу, считает частоты слов и возвращает результат.
+        /// </summary>
+        /// <param name="url">Полный HTTP(S) адрес страницы.</param>
+        /// <param name="cancellationToken">Токен отмены операции.</param>
+        /// <returns>Результат обработки; реальная отмена выбрасывает OperationCanceledException.</returns>
         public async Task<ParseResult> ParseAsync(string url, CancellationToken cancellationToken = default)
         {
             try

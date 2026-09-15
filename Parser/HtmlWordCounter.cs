@@ -3,8 +3,9 @@ using System.Text;
 
 namespace WebParser.Parser
 {
-    public readonly record struct WordFrequency(string Word, int Frequency);
-
+    /// <summary>
+    /// Стриминговый счётчик слов в HTML: однопроходный разбор без построения DOM.
+    /// </summary>
     public sealed class HtmlWordCounter
     {
         private static readonly HashSet<string> BlockTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -51,6 +52,10 @@ namespace WebParser.Parser
         private char _prev1;
         private char _prev2;
 
+        /// <summary>
+        /// Обрабатывает очередной фрагмент HTML-текста.
+        /// </summary>
+        /// <param name="chars">Фрагмент исходного HTML-кода.</param>
         public void Process(ReadOnlySpan<char> chars)
         {
             foreach (char c in chars)
@@ -59,6 +64,10 @@ namespace WebParser.Parser
             }
         }
 
+        /// <summary>
+        /// Завершает разбор и возвращает отсортированный список пар «слово — частота».
+        /// </summary>
+        /// <returns>Отсортированный список пар «слово — частота».</returns>
         public IReadOnlyList<WordFrequency> Complete()
         {
             FlushWord();
