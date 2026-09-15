@@ -178,3 +178,19 @@
   `Load500000Urls_HighThroughput_StableMemory` (500 000 URL, порог 99%, ~9 s, RPS≈53 000, рост памяти
   ≈48 МБ — стенд больше не теряет соединения на флуде, раньше 45 232 отказа на 500k);
   коммит `5673174`.
+- Рефакторинг после эпика (64 теста, `dotnet test` зелёный / 9 s) — разделение ответственностей и DI:
+  `ContentParser` (был ~480 строк) сужен до оркестратора: вынесены `CharsetDetector` (static, `Resolve`,
+  `CodePagesEncodingProvider` в static-ctor), `BoundedReadStream`, `HttpFetcher`/`IHttpFetcher`
+  (владеет `HttpClient`, retry/backoff/jitter/`Retry-After`) и `HostRateLimiter`/`IHostRateLimiter`
+  (per-host семафоры + prune); контейнер `Microsoft.Extensions.DependencyInjection` (единственная
+  внешняя зависимость продакшена, введена фабричнo регистрируемый внутренний `HttpFetcher`) —
+  composition root в `Program.cs` (`ValidateOnBuild`/`ValidateScopes`, `provider.Dispose()` диспозит
+  логгер и фетчер); правило владения «кто создал — тот и освобождает» через `_ownsFetcher`;
+  `HtmlWordCounter` намеренно оставлен конкретным классом с per-страничным состоянием
+  (интерфейс/DI не подходят transient-счётчику, инжектируемому чанками);
+  прямой консольный вывод (`Console.WriteLine` слов) убран из парсера — печать слов и выбор
+  детальности ошибок перенесены в composition root (логгер сам рендерит `Exception`); `verbose`
+  флаг полностью удалён из `ContentParser` (уровень логера и консольный вывод — забота `Program.cs`);
+  `code == 500` → `HttpStatusCode.InternalServerError`; новые тесты `CharsetDetectorTests`
+  (header > meta > UTF-8, fallback, регистронезависимость, кавычки); `urls-*.txt` в `.gitignore`;
+  коммит `29a9f0b`.
