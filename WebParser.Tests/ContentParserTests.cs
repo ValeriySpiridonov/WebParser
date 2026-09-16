@@ -6,6 +6,11 @@ namespace WebParser.Tests;
 
 public class ContentParserTests
 {
+    static ContentParserTests()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+    }
+
     private static CrawlerOptions Options(int maxAttempts = 2, int timeoutSeconds = 10, long? maxPageSize = null, int perHost = 100) => new()
     {
         MaxConcurrency = 10,

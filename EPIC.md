@@ -194,3 +194,9 @@
   `code == 500` → `HttpStatusCode.InternalServerError`; новые тесты `CharsetDetectorTests`
   (header > meta > UTF-8, fallback, регистронезависимость, кавычки); `urls-*.txt` в `.gitignore`;
   коммит `29a9f0b`.
+- Мелкие правки после рефакторинга (64 теста, `dotnet test` зелёный / 10 s):
+  `ContentParser`: `chunk` (80 КБ) удалён полностью — `ReadPrefixAsync` читает префикс напрямую в
+  `prefix` (минус Rent/Return и `Array.Copy`, `DetectPrefixBytes` больше не используется для
+  неродного буфера), `8192` вынесено в константу `ReadBufferChars = 8 * 1024`;
+  `ContentParserTests`: регистрация `CodePagesEncodingProvider` в static-ctor класса — тесты с
+  `Encoding.GetEncoding(1251)` больше не зависят от порядка запуска (латентный баг изоляции).

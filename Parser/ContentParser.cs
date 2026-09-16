@@ -10,6 +10,8 @@ namespace WebParser.Parser
     /// </summary>
     public sealed class ContentParser : IContentParser, IDisposable
     {
+        private const int ReadBufferChars = 8 * 1024;
+
         private readonly ILogger _logger;
         private readonly IHttpFetcher _fetcher;
         private readonly IHostRateLimiter _hostLimiter;
@@ -125,12 +127,11 @@ namespace WebParser.Parser
             Stream network = await response.Content.ReadAsStreamAsync(cancellationToken);
 
             byte[] prefix = ArrayPool<byte>.Shared.Rent(CharsetDetector.DetectPrefixBytes);
-            byte[] chunk = ArrayPool<byte>.Shared.Rent(81920);
-            char[] buffer = ArrayPool<char>.Shared.Rent(8192);
+            char[] buffer = ArrayPool<char>.Shared.Rent(ReadBufferChars);
 
             try
             {
-                int prefixLen = await ReadPrefixAsync(network, prefix, chunk, _options.MaxPageSizeBytes, cancellationToken);
+                int prefixLen = await ReadPrefixAsync(network, prefix, _options.MaxPageSizeBytes, cancellationToken);
                 Encoding encoding = CharsetDetector.Resolve(prefix.AsSpan(0, prefixLen), headerCharset);
 
                 using var bounded = new BoundedReadStream(network, prefix, prefixLen, prefixLen, _options.MaxPageSizeBytes);
@@ -148,19 +149,19 @@ namespace WebParser.Parser
             finally
             {
                 ArrayPool<byte>.Shared.Return(prefix);
-                ArrayPool<byte>.Shared.Return(chunk);
                 ArrayPool<char>.Shared.Return(buffer);
             }
         }
 
-        private static async Task<int> ReadPrefixAsync(Stream stream, byte[] prefix, byte[] chunk, long maxBytes, CancellationToken cancellationToken)
+        private static async Task<int> ReadPrefixAsync(Stream stream, byte[] prefix, long maxBytes, CancellationToken cancellationToken)
         {
             int prefixLen = 0;
             long total = 0;
             while (prefixLen < CharsetDetector.DetectPrefixBytes)
             {
-                int toRead = Math.Min(chunk.Length, CharsetDetector.DetectPrefixBytes - prefixLen);
-                int read = await stream.ReadAsync(chunk.AsMemory(0, toRead), cancellationToken);
+                int read = await stream.ReadAsync(
+                    prefix.AsMemory(prefixLen, CharsetDetector.DetectPrefixBytes - prefixLen),
+                    cancellationToken);
                 if (read == 0)
                 {
                     break;
@@ -172,7 +173,6 @@ namespace WebParser.Parser
                     throw new PageTooLargeException((int)maxBytes);
                 }
 
-                Array.Copy(chunk, 0, prefix, prefixLen, read);
                 prefixLen += read;
             }
 
