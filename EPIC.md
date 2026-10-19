@@ -200,3 +200,32 @@
   неродного буфера), `8192` вынесено в константу `ReadBufferChars = 8 * 1024`;
   `ContentParserTests`: регистрация `CodePagesEncodingProvider` в static-ctor класса — тесты с
   `Encoding.GetEncoding(1251)` больше не зависят от порядка запуска (латентный баг изоляции).
+- Review-проход SOLID/DRY/KISS (74 теста, `dotnet build` без предупреждений, `dotnet test` зелёный / 9 s) —
+  разбиение монолитов и правки по замечаниям ревью:
+  выделены `CliArgs` (парсинг `--verbose`/`-v` и файла-источника, неизвестная опция → exit 1),
+  `UrlSource` (чтение списка URL из файла/stdin через `UrlValidator`), `CrawlRunner`
+  (`Parallel.ForEachAsync` + метрики + verbose-вывод слов, возвращает факт прерывания пользователем),
+  `ProgressReporter` (прогресс-цикл `\r`, останавливается через `Dispose`) и `Parser/UrlValidator`
+  (единый `TryParse` «строка — полный HTTP(S) адрес» для парсера и `UrlSource`);
+  `HostRateLimiter` переписан: запись хоста получила `RefCount` (CAS 0→-1, prune удаляет парой
+  «ключ+значение», удерживаемые/ожидаемые хосты не вычищаются) — устранена гонка prune, откат refcount
+  при отмене ожидания; prune-константы перенесены в `CrawlerOptions` (`HostIdleSeconds=600`,
+  `HostPruneThreshold=5000`, `HostPruneIntervalSeconds=30`) с клампом в `ConfigLoader` и записью
+  в `appsettings.json`;
+  `HtmlWordCounter`: `IsDelimiter` по `char.IsWhiteSpace/Punctuation/Symbol` вместо `HashSet`
+  (NBSP и прочие Unicode-разделители), `AbortEntity` вынесен (поведение `&#104;&#101;` сохранено);
+  `Program.Main` разбит на секции (wiring DI, Ctrl+C, итог, `progress.Dispose()`); `ContentParser` —
+  один DI-конструктор, убраны `IDisposable`/`_ownsFetcher`/verbose-вывод слов, catch —
+  `when (ex is not OutOfMemoryException)`; `IHttpFetcher` больше не `IDisposable` (владение фетчером —
+  у DI-контейнера), `HttpFetcher` реализует `IDisposable` отдельно; `ConfigLoader.Load(path?, errors?)`
+  вместо прямого `Console.Error`; `AsyncFileLogger`: строка через переиспользуемый `StringBuilder`
+  (байты по факту), при переполнении очереди блокируются только `Error`, прочие отбрасываются
+  со счётчиком и отчётом в errorSink при `Dispose`; `WordFrequency.FormatLine`;
+  тесты: `CliArgsTests`, `HostRateLimiterTests`, `ParserScope` (парсер с собственным фетчером),
+  NBSP/дефис-кейсы `HtmlWordCounter`, `InternalsVisibleTo` в csproj; `AGENTS.md` обновлён под
+  новую структуру; `*.DMP` в `.gitignore`; коммит `1e9b03c`.
+- Анализ дампа `WebParser.DMP` (19.10.2026, без изменений кода): «зависание» после Ctrl+C — это
+  `Console.ReadKey()` в конце `Main` (грейс-шатдаун отработал: итоги напечатаны, ждёт клавишу);
+  writer `AsyncFileLogger` жив и вычитал очередь — обрыв хвоста `log.txt` лишь в буфере
+  `StreamWriter` (flush будет при `Dispose`); deadlock/застрявших потоков не найдено
+  (`clrthreads`/`clrstack -all`/`dumpasync`).
