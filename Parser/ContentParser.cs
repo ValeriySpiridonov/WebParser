@@ -8,7 +8,7 @@ namespace WebParser.Parser
     /// <summary>
     /// Скачивает страницу по адресу, парсит текст и считает частоту слов.
     /// </summary>
-    public sealed class ContentParser : IContentParser, IDisposable
+    public sealed class ContentParser : IContentParser
     {
         private const int ReadBufferChars = 8 * 1024;
 
@@ -16,21 +16,10 @@ namespace WebParser.Parser
         private readonly IHttpFetcher _fetcher;
         private readonly IHostRateLimiter _hostLimiter;
         private readonly CrawlerOptions _options;
-        private readonly bool _ownsFetcher;
 
         /// <summary>
-        /// Создаёт обработчик страниц с собственным HTTP-клиентом и лимитером.
-        /// </summary>
-        /// <param name="logger">Журнал для событий обработки.</param>
-        /// <param name="options">Параметры краулера.</param>
-        public ContentParser(ILogger logger, CrawlerOptions options)
-            : this(logger, options, new HttpFetcher(options, logger), new HostRateLimiter(options.MaxConcurrentPerHost))
-        {
-            _ownsFetcher = true;
-        }
-
-        /// <summary>
-        /// Создаёт обработчик страниц с инжектированными фетчером и лимитером; переданные зависимости освобождаются вызывающим.
+        /// Создаёт обработчик страниц с инжектированными зависимостями; освобождение
+        /// фетчера и лимитера — забота их владельца (DI-контейнера или вызывающего).
         /// </summary>
         /// <param name="logger">Журнал для событий обработки.</param>
         /// <param name="options">Параметры краулера.</param>
@@ -45,17 +34,6 @@ namespace WebParser.Parser
         }
 
         /// <summary>
-        /// Освобождает HTTP-клиент, если фетчер был создан этим обработчиком.
-        /// </summary>
-        public void Dispose()
-        {
-            if (_ownsFetcher)
-            {
-                _fetcher.Dispose();
-            }
-        }
-
-        /// <summary>
         /// Скачивает страницу по адресу, считает частоты слов и возвращает результат.
         /// </summary>
         /// <param name="url">Полный HTTP(S) адрес страницы.</param>
@@ -65,8 +43,7 @@ namespace WebParser.Parser
         {
             try
             {
-                if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-                    !(uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+                if (!UrlValidator.TryParse(url, out Uri? uri))
                 {
                     _logger.Log(new LogMessage { Message = $"Некорректный адрес: {url}" });
                     return new ParseResult(ParseOutcome.InvalidUrl);
@@ -88,15 +65,7 @@ namespace WebParser.Parser
 
                 var words = await CountWordsAsync(response, cancellationToken);
 
-                _logger.Log(new LogMessage { Message = $"Обработка адреса {url} завершена. Результаты обработки:" });
-                foreach (var item in words)
-                {
-                    _logger.Log(new LogMessage
-                    {
-                        Message = $"Слово: {item.Word}\tКоличество повторов: {item.Frequency}",
-                        Level = LogLevel.Verbose
-                    });
-                }
+                _logger.Log(new LogMessage { Message = $"Обработка адреса {url} завершена" });
 
                 return new ParseResult(ParseOutcome.Success, words);
             }
@@ -114,7 +83,7 @@ namespace WebParser.Parser
                 _logger.Log(new LogMessage { Message = $"Слишком большой ответ от адреса {url}" });
                 return new ParseResult(ParseOutcome.PageTooLarge);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 _logger.Log(new LogMessage { Message = $"Ошибка при обработке адреса {url}", Exception = ex });
                 return new ParseResult(ParseOutcome.Failed);

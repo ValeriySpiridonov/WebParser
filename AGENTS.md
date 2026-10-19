@@ -11,31 +11,41 @@
 - HTTP: BCL `System.Net.Http.HttpClient`.
 
 ## Структура
-- `Program.cs` — точка входа: конфиг из `appsettings.json` (см. `WebParser.Config`), композиция сервисов
-  в `ServiceCollection` (composition root: `ILogger`, `IHttpFetcher`, `IContentParser`), чтение списка URL
-  (файл/аргумент или stdin), `Parallel.ForEachAsync` по `MaxConcurrency`, Ctrl+C → graceful shutdown
-  (стоп планирования, текущие запросы доживают до 5 с, затем жёсткая отмена), прогресс-цикл (`\r`,
-  не-verbose), итоговая строка.
+- `Program.cs` — точка входа: разбор аргументов (`CliArgs`), конфиг из `appsettings.json` (см. `WebParser.Config`),
+  композиция сервисов в `ServiceCollection` (composition root: `ILogger`, `IHttpFetcher`, `IContentParser`),
+  Ctrl+C → graceful shutdown (стоп планирования, текущие запросы доживают до 5 с, затем жёсткая отмена),
+  итоговая строка.
+- `CliArgs.cs` — аргументы командной строки: `--verbose`/`-v` в любом порядке, первый аргумент без дефиса —
+  файл со списком URL; неизвестная опция → ошибка + exit code 1.
+- `UrlSource.cs` — чтение списка URL (файл или stdin) с фильтрацией через `UrlValidator`.
+- `CrawlRunner.cs` — `Parallel.ForEachAsync` по `MaxConcurrency`, запись метрик, verbose-вывод слов
+  (консоль + лог через `WordFrequency.FormatLine`), возвращает факт прерывания пользователем.
+- `ProgressReporter.cs` — прогресс-цикл (`\r`, не-verbose), останавливается через `Dispose`.
 - `Config/AppOptions.cs`, `Config/CrawlerOptions.cs`, `Config/LoggingOptions.cs`, `Config/ConfigLoader.cs`, `Config/LogLevelConverter.cs` — POCO опции (Crawler/Logging),
   загрузка + кламп; конвертер `LogLevel` терпим к опечаткам/числам (fallback → `Info`).
 - `Stats/RunStats.cs` — метрики: обработано / ошибок / RPS / среднее время / прошедшее время.
 - `Parser/IContentParser.cs`, `Parser/ParseResult.cs`, `Parser/ParseOutcome.cs`, `Parser/ContentParser.cs` — оркестрация обработки
-  одной страницы: валидация адреса, per-host гейт (`HostRateLimiter`), лимит размера страницы (из опций),
+  одной страницы: валидация адреса (`UrlValidator`), per-host гейт (`HostRateLimiter`), лимит размера страницы (из опций),
   стриминговое чтение тела без буферизации в `byte[]`; `ParseAsync` возвращает `Task<ParseResult>`; OCE
   перевыбрасывается только при реальной отмене токена, сетевой таймаут даёт `Failed`;
-  `ContentParser : IDisposable` — владеет HTTP-клиентом только если фетчер создан им самим, инжектированный фетчер освобождает вызывающий (DI-контейнер).
+  единственный конструктор — с инжектированными зависимостями, владение фетчером — у его владельца
+  (DI-контейнер или тестовый `ParserScope`).
+- `Parser/UrlValidator.cs` — единая проверка «строка — полный HTTP(S) адрес» (используется и парсером, и `UrlSource`).
 - `Parser/IHttpFetcher.cs`, `Parser/HttpFetcher.cs` — скачивание страницы с повторами из опций
-  (backoff+jitter, `Retry-After`); `HttpFetcher` владеет `HttpClient`.
+  (backoff+jitter, `Retry-After`); `IDisposable` — на конкретном `HttpFetcher`, не на интерфейсе
+  (синглтон освобождает DI-контейнер).
 - `Parser/HostRateLimiter.cs`, `Parser/IHostRateLimiter.cs` — per-host лимит одновременных операций
-  (семафор на хост из опций) с вычисткой простаивающих хостов.
+  (семафор на хост из опций) с вычисткой простаивающих хостов: запись хоста помечается на удаление
+  только из состояния `RefCount == 0` (удерживаемые/ожидаемые хосты не вычищаются).
 - `Parser/CharsetDetector.cs` — определение кодировки из заголовка Content-Type и `<meta charset>`.
 - `Parser/BoundedReadStream.cs` — стрим, ограничивающий суммарный объём чтения (`PageTooLargeException`).
-- `Parser/HtmlWordCounter.cs` — стриминговый single-pass разбор текста (state machine, без DOM): блок-разделители, пропуск script/style/textarea, комментарии, entities; `WordFrequency` — в `Parser/WordFrequency.cs`.
+- `Parser/HtmlWordCounter.cs` — стриминговый single-pass разбор текста (state machine, без DOM): блок-разделители, пропуск script/style/textarea, комментарии, entities; разделители — `char.IsWhiteSpace/IsPunctuation/IsSymbol` (в т.ч. NBSP); `WordFrequency` — в `Parser/WordFrequency.cs` (+ `FormatLine`).
 - `Parser/PageTooLargeException.cs` — выбрасывается при превышении лимита страницы.
-- `Logger/ILogger.cs`, `ILogMessage.cs`, `LogMessage.cs` (`required Message`, `Exception?`, `Level`), `AsyncFileLogger.cs` — Channel-логгер из опций (ротация по размеру, уровни). `LogLevel` — отдельный файл `LogLevel.cs`.
-- `WebParser.Tests/` (xUnit) — юнит-тесты `HtmlWordCounter`/`ConfigLoader`/`RunStats`/`AsyncFileLogger`,
+- `Logger/ILogger.cs`, `ILogMessage.cs`, `LogMessage.cs` (`required Message`, `Exception?`, `Level`), `AsyncFileLogger.cs` — Channel-логгер из опций (ротация по размеру, уровни; при переполнении очереди блокируются только Error, прочие отбрасываются с отчётом в errorSink). `LogLevel` — отдельный файл `LogLevel.cs`.
+- `WebParser.Tests/` (xUnit) — юнит-тесты `HtmlWordCounter`/`ConfigLoader`/`RunStats`/`AsyncFileLogger`/`HostRateLimiter`/`CliArgs`,
   интеграционные `ContentParser` + `StubHttpServer` (локальный `TcpListener`-сервер), бенчмарк-прогон;
-  helpers: `TestLogger`, `NullLogger`, `StubHttpServer`. Основной csproj исключает `WebParser.Tests\**` из компиляции.
+  helpers: `TestLogger`, `NullLogger`, `StubHttpServer`, `ParserScope` (парсер с собственным фетчером).
+  Основной csproj исключает `WebParser.Tests\**` из компиляции; internals видны тестам через `InternalsVisibleTo`.
 - `appsettings.json` — шаблон конфигурации (факультатив; отсутствие файла → дефолты).
 
 ## Конвенции

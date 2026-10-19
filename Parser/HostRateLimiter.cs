@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using WebParser.Config;
 
 namespace WebParser.Parser
 {
@@ -8,71 +9,135 @@ namespace WebParser.Parser
     /// </summary>
     internal sealed class HostRateLimiter : IHostRateLimiter
     {
-        private const int HostSemsPruneThreshold = 5000;
-        private const long HostIdleMs = 10 * 60 * 1000;
-        private const long PruneCheckIntervalMs = 30 * 1000;
-
-        private readonly int _maxConcurrentPerHost;
-        private readonly ConcurrentDictionary<string, SemaphoreSlim> _hostSems = new();
-        private readonly ConcurrentDictionary<string, long> _hostLastUse = new();
+        private readonly CrawlerOptions _options;
+        private readonly ConcurrentDictionary<string, HostEntry> _hosts = new();
         private long _lastPruneCheck;
 
         /// <summary>
-        /// Создаёт лимитер с указанным числом слота на хост.
+        /// Создаёт лимитер: слоты на хост и пороги вычистки берутся из опций краулера.
         /// </summary>
-        /// <param name="maxConcurrentPerHost">Максимум одновременных операций на один хост.</param>
-        public HostRateLimiter(int maxConcurrentPerHost)
+        /// <param name="options">Параметры краулера.</param>
+        public HostRateLimiter(CrawlerOptions options)
         {
-            _maxConcurrentPerHost = maxConcurrentPerHost;
+            _options = options;
         }
+
+        /// <summary>Число хостов, хранимых лимитером.</summary>
+        public int HostCount => _hosts.Count;
 
         /// <inheritdoc />
         public async Task<IDisposable> AcquireAsync(string host, CancellationToken cancellationToken = default)
         {
-            PruneHostSemsIfNeeded();
-            SemaphoreSlim semaphore = _hostSems.GetOrAdd(host, _ => new SemaphoreSlim(_maxConcurrentPerHost));
-            await semaphore.WaitAsync(cancellationToken);
-            _hostLastUse[host] = Environment.TickCount64;
-            return new HostGate(semaphore);
+            PruneIfNeeded();
+
+            HostEntry entry = Enter(host);
+            try
+            {
+                await entry.Semaphore.WaitAsync(cancellationToken);
+            }
+            catch
+            {
+                // Ожидание не завершилось захватом слота — откатываем только счётчик входов.
+                Interlocked.Decrement(ref entry.RefCount);
+                throw;
+            }
+
+            entry.LastUse = Environment.TickCount64;
+            return new HostGate(entry);
         }
 
-        private void PruneHostSemsIfNeeded()
+        private HostEntry Enter(string host)
+        {
+            while (true)
+            {
+                HostEntry entry = _hosts.GetOrAdd(host, static (_, max) => new HostEntry(max), _options.MaxConcurrentPerHost);
+
+                // Входим в запись только атомарным подсчётом: вычистка помечает запись
+                // значением -1 строго из состояния RefCount == 0, поэтому удерживаемая
+                // или ожидаемая запись никогда не будет удалена.
+                int seen;
+                do
+                {
+                    seen = Volatile.Read(ref entry.RefCount);
+                    if (seen < 0)
+                    {
+                        break;
+                    }
+                } while (Interlocked.CompareExchange(ref entry.RefCount, seen + 1, seen) != seen);
+
+                if (seen < 0)
+                {
+                    continue;
+                }
+
+                if (_hosts.TryGetValue(host, out HostEntry? mapped) && ReferenceEquals(mapped, entry))
+                {
+                    return entry;
+                }
+
+                Interlocked.Decrement(ref entry.RefCount);
+            }
+        }
+
+        private void PruneIfNeeded()
         {
             long now = Environment.TickCount64;
-            if (now - _lastPruneCheck < PruneCheckIntervalMs)
+            long intervalMs = _options.HostPruneIntervalSeconds * 1000L;
+            if (now - Volatile.Read(ref _lastPruneCheck) < intervalMs)
             {
                 return;
             }
 
-            _lastPruneCheck = now;
+            Volatile.Write(ref _lastPruneCheck, now);
 
-            if (_hostSems.Count < HostSemsPruneThreshold)
+            if (_hosts.Count < _options.HostPruneThreshold)
             {
                 return;
             }
 
-            foreach (string host in _hostSems.Keys)
+            long idleMs = _options.HostIdleSeconds * 1000L;
+            foreach (KeyValuePair<string, HostEntry> pair in _hosts)
             {
-                if (_hostLastUse.TryGetValue(host, out long last) && now - last > HostIdleMs)
+                HostEntry entry = pair.Value;
+                if (now - Volatile.Read(ref entry.LastUse) <= idleMs)
                 {
-                    _hostLastUse.TryRemove(host, out _);
-                    _hostSems.TryRemove(host, out _);
+                    continue;
+                }
+
+                if (Interlocked.CompareExchange(ref entry.RefCount, -1, 0) == 0)
+                {
+                    _hosts.TryRemove(pair);
                 }
             }
         }
 
-        private readonly struct HostGate : IDisposable
+        private sealed class HostEntry
         {
-            private readonly SemaphoreSlim _semaphore;
+            public readonly SemaphoreSlim Semaphore;
+            public long LastUse;
+            public int RefCount;
 
-            public HostGate(SemaphoreSlim semaphore)
+            public HostEntry(int maxConcurrentPerHost)
             {
-                _semaphore = semaphore;
+                Semaphore = new SemaphoreSlim(maxConcurrentPerHost);
+                LastUse = Environment.TickCount64;
+            }
+        }
+
+        private sealed class HostGate : IDisposable
+        {
+            private readonly HostEntry _entry;
+
+            public HostGate(HostEntry entry)
+            {
+                _entry = entry;
             }
 
             public void Dispose()
             {
-                _semaphore.Release();
+                _entry.Semaphore.Release();
+                _entry.LastUse = Environment.TickCount64;
+                Interlocked.Decrement(ref _entry.RefCount);
             }
         }
     }

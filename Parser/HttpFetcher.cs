@@ -5,9 +5,10 @@ using WebParser.Logger;
 namespace WebParser.Parser
 {
     /// <summary>
-    /// Скачивает страницу по URI с автоматическими повторами и exponential backoff.
+    /// Скачивает страницу по URI с автоматическими повторами и exponential backoff;
+    /// владеет HTTP-клиентом и освобождает его через <see cref="IDisposable"/>.
     /// </summary>
-    internal sealed class HttpFetcher : IHttpFetcher
+    internal sealed class HttpFetcher : IHttpFetcher, IDisposable
     {
         private readonly HttpClient _http;
         private readonly CrawlerOptions _options;

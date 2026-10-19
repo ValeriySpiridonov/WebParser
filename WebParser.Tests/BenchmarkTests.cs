@@ -49,7 +49,7 @@ public class BenchmarkTests
     private static async Task<(int Ok, int Failed, TimeSpan Elapsed, long StartBytes, long EndBytes)> RunLoadAsync(
         string baseUrl, int count, int maxConcurrency)
     {
-        using var parser = new ContentParser(new NullLogger(), new CrawlerOptions
+        using var parser = new ParserScope(new NullLogger(), new CrawlerOptions
         {
             MaxConcurrency = maxConcurrency,
             MaxAttempts = 2,

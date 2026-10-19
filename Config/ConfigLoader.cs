@@ -16,11 +16,13 @@ namespace WebParser.Config
         };
 
         /// <summary>
-        /// Загружает и нормализует конфигурацию. При отсутствии или ошибке файла возвращает дефолты.
+        /// Загружает и нормализует конфигурацию. При отсутствии или ошибке файла возвращает дефолты,
+        /// а описание ошибки передаёт в <paramref name="errors"/>.
         /// </summary>
         /// <param name="filePath">Путь к файлу конфигурации; если не указан — appsettings.json.</param>
+        /// <param name="errors">Поток для вывода ошибок загрузки; по умолчанию ошибки не выводятся.</param>
         /// <returns>Нормализованные параметры приложения.</returns>
-        public static AppOptions Load(string? filePath = null)
+        public static AppOptions Load(string? filePath = null, TextWriter? errors = null)
         {
             AppOptions? options = null;
             string? path = ResolvePath(filePath);
@@ -32,11 +34,11 @@ namespace WebParser.Config
                 }
                 catch (JsonException ex)
                 {
-                    Console.Error.WriteLine($"Некорректный файл конфигурации {path}: {ex.Message}");
+                    errors?.WriteLine($"Некорректный файл конфигурации {path}: {ex.Message}");
                 }
                 catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
                 {
-                    Console.Error.WriteLine($"Не удалось прочитать файл конфигурации {path}: {ex.Message}");
+                    errors?.WriteLine($"Не удалось прочитать файл конфигурации {path}: {ex.Message}");
                 }
             }
 
@@ -72,6 +74,9 @@ namespace WebParser.Config
                     MaxConcurrency = Math.Max(1, crawler.MaxConcurrency),
                     MaxAttempts = Math.Max(1, crawler.MaxAttempts),
                     MaxConcurrentPerHost = Math.Max(1, crawler.MaxConcurrentPerHost),
+                    HostIdleSeconds = Math.Max(0, crawler.HostIdleSeconds),
+                    HostPruneThreshold = Math.Max(1, crawler.HostPruneThreshold),
+                    HostPruneIntervalSeconds = Math.Max(0, crawler.HostPruneIntervalSeconds),
                     MaxPageSizeBytes = Math.Max(1024 * 1024, crawler.MaxPageSizeBytes),
                     TimeoutSeconds = Math.Max(1, crawler.TimeoutSeconds),
                     RetryBaseDelayMs = Math.Max(0, crawler.RetryBaseDelayMs),

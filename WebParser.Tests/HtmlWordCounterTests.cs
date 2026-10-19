@@ -63,6 +63,20 @@ public class HtmlWordCounterTests
     }
 
     [Fact]
+    public void NonBreakingSpace_SeparatesWords()
+    {
+        Assert.Equal(new[] { "мир", "привет" }, Words("Привет\u00A0мир"));
+    }
+
+    [Theory]
+    [InlineData("well-known", new[] { "known", "well" })]
+    [InlineData("Tom's cat", new[] { "cat", "s", "tom" })]
+    public void PunctuationInsideToken_SplitsWords(string html, string[] expected)
+    {
+        Assert.Equal(expected, Words(html));
+    }
+
+    [Fact]
     public void Words_AreLowercased_AndCounted()
     {
         Assert.Equal(new[] { new WordFrequency("hello", 3) }, Count("Hello HELLO hEllO"));

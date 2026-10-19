@@ -23,7 +23,7 @@ public class ContentParserTests
         UserAgent = "WebParser.Tests/1.0"
     };
 
-    private static async Task<ParseResult> ParseAsync(ContentParser parser, StubHttpServer server, string path)
+    private static async Task<ParseResult> ParseAsync(ParserScope parser, StubHttpServer server, string path)
         => await parser.ParseAsync(server.BaseUrl + path.TrimStart('/'));
 
     [Fact]
@@ -31,7 +31,7 @@ public class ContentParserTests
     {
         using var server = new StubHttpServer(_ => StubHttpServer.Response.Html("<p>Hello World</p><p>Hello</p>"));
         var logger = new TestLogger();
-        var parser = new ContentParser(logger, Options());
+        using var parser = new ParserScope(logger, Options());
 
         ParseResult result = await ParseAsync(parser, server, "/page");
 
@@ -45,7 +45,7 @@ public class ContentParserTests
     {
         byte[] body = Encoding.GetEncoding(1251).GetBytes("<p>Привет мир</p>");
         using var server = new StubHttpServer(_ => StubHttpServer.Response.Raw(body, "text/html; charset=windows-1251"));
-        var parser = new ContentParser(new NullLogger(), Options());
+        using var parser = new ParserScope(new NullLogger(), Options());
 
         ParseResult result = await ParseAsync(parser, server, "/page");
 
@@ -57,7 +57,7 @@ public class ContentParserTests
     {
         byte[] body = Encoding.UTF8.GetBytes("<meta charset=\"utf-8\"><p>Тест успешен</p>");
         using var server = new StubHttpServer(_ => StubHttpServer.Response.Raw(body, "text/html"));
-        var parser = new ContentParser(new NullLogger(), Options());
+        using var parser = new ParserScope(new NullLogger(), Options());
 
         ParseResult result = await ParseAsync(parser, server, "/page");
 
@@ -69,7 +69,7 @@ public class ContentParserTests
     {
         byte[] body = Encoding.GetEncoding(1251).GetBytes("<meta charset=\"utf-8\"><p>Привет</p>");
         using var server = new StubHttpServer(_ => StubHttpServer.Response.Raw(body, "text/html; charset=windows-1251"));
-        var parser = new ContentParser(new NullLogger(), Options());
+        using var parser = new ParserScope(new NullLogger(), Options());
 
         ParseResult result = await ParseAsync(parser, server, "/page");
 
@@ -81,7 +81,7 @@ public class ContentParserTests
     {
         string big = new string('a', 4096);
         using var server = new StubHttpServer(_ => StubHttpServer.Response.Html($"<p>{big}</p>"));
-        var parser = new ContentParser(new NullLogger(), Options(maxPageSize: 1024));
+        using var parser = new ParserScope(new NullLogger(), Options(maxPageSize: 1024));
 
         ParseResult result = await ParseAsync(parser, server, "/big");
 
@@ -97,7 +97,7 @@ public class ContentParserTests
             Interlocked.Increment(ref attempts) == 1
                 ? new StubHttpServer.Response { StatusCode = 503 }
                 : StubHttpServer.Response.Html("<p>ok</p>"));
-        var parser = new ContentParser(new NullLogger(), Options(maxAttempts: 3));
+        using var parser = new ParserScope(new NullLogger(), Options(maxAttempts: 3));
 
         ParseResult result = await ParseAsync(parser, server, "/retry");
 
@@ -109,7 +109,7 @@ public class ContentParserTests
     public async Task Retry_Exhausted_ReturnsHttpError()
     {
         using var server = new StubHttpServer(_ => new StubHttpServer.Response { StatusCode = 503 });
-        var parser = new ContentParser(new NullLogger(), Options(maxAttempts: 2));
+        using var parser = new ParserScope(new NullLogger(), Options(maxAttempts: 2));
 
         ParseResult result = await ParseAsync(parser, server, "/retry");
 
@@ -121,7 +121,7 @@ public class ContentParserTests
     public async Task NotFound_ReturnsHttpError_WithoutRetry()
     {
         using var server = new StubHttpServer(_ => StubHttpServer.Response.Html("<p>nope</p>", statusCode: 404));
-        var parser = new ContentParser(new NullLogger(), Options(maxAttempts: 3));
+        using var parser = new ParserScope(new NullLogger(), Options(maxAttempts: 3));
 
         ParseResult result = await ParseAsync(parser, server, "/missing");
 
@@ -132,7 +132,7 @@ public class ContentParserTests
     [Fact]
     public async Task InvalidUrl_ReturnsInvalidUrl()
     {
-        var parser = new ContentParser(new NullLogger(), Options());
+        using var parser = new ParserScope(new NullLogger(), Options());
 
         ParseResult result = await parser.ParseAsync("not a url");
 
@@ -149,7 +149,7 @@ public class ContentParserTests
             Body = Array.Empty<byte>(),
             DelayMs = 3000
         });
-        var parser = new ContentParser(new NullLogger(), Options(maxAttempts: 2, timeoutSeconds: 1));
+        using var parser = new ParserScope(new NullLogger(), Options(maxAttempts: 2, timeoutSeconds: 1));
 
         ParseResult result = await ParseAsync(parser, server, "/slow");
 
@@ -161,7 +161,7 @@ public class ContentParserTests
     public async Task CallerCancellation_StillThrows()
     {
         using var server = new StubHttpServer(_ => StubHttpServer.Response.Html("<p>x</p>"));
-        var parser = new ContentParser(new NullLogger(), Options());
+        using var parser = new ParserScope(new NullLogger(), Options());
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -176,7 +176,7 @@ public class ContentParserTests
             .Concat(Encoding.UTF8.GetBytes("<p>Привет мир</p>"))
             .ToArray();
         using var server = new StubHttpServer(_ => StubHttpServer.Response.Raw(body, "text/html; charset=windows-1251"));
-        var parser = new ContentParser(new NullLogger(), Options());
+        using var parser = new ParserScope(new NullLogger(), Options());
 
         ParseResult result = await ParseAsync(parser, server, "/bom");
 
@@ -192,7 +192,7 @@ public class ContentParserTests
             leakPort = leak.Port;
         }
 
-        var parser = new ContentParser(new NullLogger(), Options(maxAttempts: 2, timeoutSeconds: 5));
+        using var parser = new ParserScope(new NullLogger(), Options(maxAttempts: 2, timeoutSeconds: 5));
         ParseResult result = await parser.ParseAsync($"http://127.0.0.1:{leakPort}/dead");
 
         Assert.Equal(ParseOutcome.Failed, result.Outcome);
@@ -208,7 +208,7 @@ public class ContentParserTests
             Body = Array.Empty<byte>(),
             DelayMs = 300
         });
-        var parser = new ContentParser(new NullLogger(), Options(perHost: 1, timeoutSeconds: 10));
+        using var parser = new ParserScope(new NullLogger(), Options(perHost: 1, timeoutSeconds: 10));
 
         Task<ParseResult>[] tasks = Enumerable.Range(0, 4)
             .Select(i => parser.ParseAsync(server.BaseUrl + "p" + i))

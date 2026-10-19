@@ -23,8 +23,6 @@ namespace WebParser.Parser
             "script", "style", "textarea"
         };
 
-        private static readonly HashSet<char> Delimiters = new HashSet<char>(" ,.!?\";:[]()\n\r\t");
-
         private enum Mode
         {
             Text,
@@ -150,25 +148,21 @@ namespace WebParser.Parser
                 return;
             }
 
-            if (_entityLen >= 12)
+            if (_entityLen >= 12 || (c != '#' && !char.IsLetterOrDigit(c)))
             {
-                _inEntity = false;
-                _entityLen = 0;
-                FlushWord();
-                ProcessTextChar(c);
-                return;
-            }
-
-            if (c != '#' && !char.IsLetterOrDigit(c))
-            {
-                _inEntity = false;
-                _entityLen = 0;
-                FlushWord();
+                AbortEntity();
                 ProcessTextChar(c);
                 return;
             }
 
             _entityBuffer[_entityLen++] = c;
+        }
+
+        private void AbortEntity()
+        {
+            _inEntity = false;
+            _entityLen = 0;
+            FlushWord();
         }
 
         private void FeedResolvedChar(char c)
@@ -409,9 +403,14 @@ namespace WebParser.Parser
             _word.Clear();
         }
 
+        private static bool IsDelimiter(char c)
+        {
+            return char.IsWhiteSpace(c) || char.IsPunctuation(c) || char.IsSymbol(c);
+        }
+
         private bool IsWordChar(char c)
         {
-            return !Delimiters.Contains(c);
+            return !IsDelimiter(c);
         }
     }
 }

@@ -14,6 +14,15 @@ namespace WebParser.Config
         /// <summary>Максимальное число одновременных запросов к одному хосту.</summary>
         public int MaxConcurrentPerHost { get; init; } = 2;
 
+        /// <summary>Через сколько секунд простоя хост вычищается из лимитера одновременных операций.</summary>
+        public int HostIdleSeconds { get; init; } = 600;
+
+        /// <summary>Минимальное число хостов в лимитере, при котором начинается вычистка простаивающих.</summary>
+        public int HostPruneThreshold { get; init; } = 5000;
+
+        /// <summary>Интервал в секундах между попытками вычистки простаивающих хостов.</summary>
+        public int HostPruneIntervalSeconds { get; init; } = 30;
+
         /// <summary>Максимальный размер скачиваемой страницы в байтах.</summary>
         public long MaxPageSizeBytes { get; init; } = 5 * 1024 * 1024;
 

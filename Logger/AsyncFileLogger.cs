@@ -19,8 +19,10 @@ namespace WebParser.Logger
         private readonly TextWriter _errorSink;
 
         private StreamWriter _writer;
+        private readonly StringBuilder _lineBuilder = new StringBuilder(128);
         private long _bytesWritten;
         private long _messagesSinceFlush;
+        private long _droppedMessages;
         private volatile bool _disposed;
         private volatile bool _writerFaulted;
 
@@ -66,16 +68,26 @@ namespace WebParser.Logger
             if (_disposed || _writerFaulted) return;
             if (logMessage.Level < _minLevel) return;
 
-            if (!_channel.Writer.TryWrite(logMessage))
+            if (_channel.Writer.TryWrite(logMessage))
             {
-                try
-                {
-                    _channel.Writer.WriteAsync(logMessage).AsTask().GetAwaiter().GetResult();
-                }
-                catch (ChannelClosedException)
-                {
-                    // Канал закрыт (Dispose или сбой писателя) — сообщение намеренно теряется.
-                }
+                return;
+            }
+
+            // Очередь переполнена: критичные записи ждут освобождения места (доставка важнее
+            // скорости), остальные отбрасываются, чтобы медленный диск не останавливал продьюсера.
+            if (logMessage.Level < LogLevel.Error)
+            {
+                Interlocked.Increment(ref _droppedMessages);
+                return;
+            }
+
+            try
+            {
+                _channel.Writer.WriteAsync(logMessage).AsTask().GetAwaiter().GetResult();
+            }
+            catch (ChannelClosedException)
+            {
+                // Канал закрыт (Dispose или сбой писателя) — сообщение намеренно теряется.
             }
         }
 
@@ -95,6 +107,12 @@ namespace WebParser.Logger
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 _errorSink.WriteLine($"Не удалось закрыть файл лога {_logFileName}: {ex.Message}");
+            }
+
+            long dropped = Interlocked.Read(ref _droppedMessages);
+            if (dropped > 0)
+            {
+                _errorSink.WriteLine($"Лог: пропущено {dropped} сообщений из-за переполнения очереди");
             }
         }
 
@@ -129,25 +147,20 @@ namespace WebParser.Logger
 
         private void WriteToFile(ILogMessage logMessage)
         {
+            _lineBuilder.Clear();
             Span<char> stamp = stackalloc char[32];
             DateTime.Now.TryFormat(stamp, out int written, "yyyy-MM-dd HH:mm:ss");
-            _writer.Write(stamp.Slice(0, written));
-            _writer.Write(": ");
-            _writer.Write(logMessage.Message);
-
-            long bytes = Encoding.UTF8.GetByteCount(stamp.Slice(0, written)) + 3 +
-                         Encoding.UTF8.GetByteCount(logMessage.Message.AsSpan());
+            _lineBuilder.Append(stamp.Slice(0, written)).Append(": ").Append(logMessage.Message);
             if (logMessage.Exception != null)
             {
-                _writer.Write(Environment.NewLine);
-                _writer.Write("Exception: ");
-                _writer.Write(logMessage.Exception);
-                bytes += Encoding.UTF8.GetByteCount(Environment.NewLine) + 11 +
-                         Encoding.UTF8.GetByteCount(logMessage.Exception.ToString().AsSpan());
+                _lineBuilder.Append(Environment.NewLine).Append("Exception: ").Append(logMessage.Exception);
             }
 
-            _writer.Write(Environment.NewLine);
-            _bytesWritten += bytes + Encoding.UTF8.GetByteCount(Environment.NewLine);
+            _lineBuilder.Append(Environment.NewLine);
+
+            string line = _lineBuilder.ToString();
+            _writer.Write(line);
+            _bytesWritten += Encoding.UTF8.GetByteCount(line);
             _messagesSinceFlush++;
         }
 
